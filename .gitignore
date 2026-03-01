@@ -1,0 +1,10 @@
+anaconda-ks.cfg
+.venv/
+tests/__pycache__/
+.coverage
+.ACTIVITY.log 
+.pytest_cache/
+.regedUsers
+config.yaml
+*.yaml
+!config.example.yaml

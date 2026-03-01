@@ -1,0 +1,67 @@
+# ldap-manager configuration
+# Copy to /etc/ldap-manager/config.yaml or ~/.ldap-manager.yaml
+
+ldap:
+  # Server URI — use ldaps:// in production, never ldap:// over WAN
+  uri: "ldap://localhost:389"
+  # Bind DN — this is your admin/service account
+  bind_dn: "cn=admin,dc=example,dc=com"
+  # Bind password — override with LDAP_BIND_PASSWORD env var
+  bind_password: "changeme"
+  # Base DN for the directory
+  base_dn: "dc=example,dc=com"
+  # OU where user entries live
+  users_ou: "ou=People,dc=example,dc=com"
+  # OU for groups (used during user creation for default group)
+  groups_ou: "ou=Groups,dc=example,dc=com"
+  # StartTLS on ldap:// connections (ignored for ldaps://)
+  start_tls: false
+  # TLS CA cert path (required if start_tls or ldaps)
+  tls_cacert: "/etc/ssl/certs/ca-certificates.crt"
+  # Connection timeout in seconds
+  timeout: 10
+
+users:
+  # Default login shell for new users
+  default_shell: "/bin/bash"
+  # Shell set when disabling a user
+  disabled_shell: "/sbin/nologin"
+  # Default home directory prefix — home = prefix/uid
+  home_prefix: "/home"
+  # UID number range for auto-assignment
+  uid_min: 10000
+  uid_max: 60000
+  # Default GID for new users (must exist)
+  default_gid: 10000
+  # Object classes for new user entries
+  object_classes:
+    - "inetOrgPerson"
+    - "posixAccount"
+    - "shadowAccount"
+  # ── Creation defaults ────────────────────────────────────────
+  # Mail domain — new users get uid@mail_domain automatically
+  # Leave empty to require --mail on every create
+  mail_domain: "example.com"
+  # Default password for all new users (empty = no password on create)
+  default_password: ""
+  # Auto-generate a random password on create (overrides default_password)
+  # The generated password is printed to stdout
+  generate_password_on_create: true
+
+backup:
+  # Directory for dump files
+  backup_dir: "/var/backups/ldap"
+  # slapcat binary path
+  slapcat_bin: "/usr/sbin/slapcat"
+  # slapadd binary path
+  slapadd_bin: "/usr/sbin/slapadd"
+  # Keep N most recent backups (0 = keep all)
+  retention_count: 10
+
+password:
+  # Password hash scheme: {SSHA}, {SHA512}, {ARGON2} (if supported)
+  hash_scheme: "{SSHA}"
+  # Length for generated passwords
+  generated_length: 20
+  # Output file for bulk password changes (CSV: uid,password)
+  bulk_output_file: "/tmp/ldap_passwords.csv"
