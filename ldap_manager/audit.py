@@ -119,7 +119,7 @@ class AuditLogger:
 
         entries: list[dict[str, Any]] = []
         try:
-            with open(self._path, "r", encoding="utf-8") as f:
+            with open(self._path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:

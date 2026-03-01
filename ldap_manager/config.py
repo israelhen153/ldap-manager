@@ -103,7 +103,7 @@ class PasswordConfig:
     hash_scheme: str = "{SSHA}"
     generated_length: int = 20
     bulk_output_file: str = "/tmp/ldap_passwords.csv"
-    default_password: str = "Aa123456"
+    default_password: str = "123456"
 
 
 @dataclass
