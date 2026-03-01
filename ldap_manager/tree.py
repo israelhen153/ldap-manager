@@ -139,7 +139,7 @@ class TreeManager:
         try:
             conn.search_s(dn, ldap.SCOPE_BASE, "(objectClass=*)", ["dn"])
         except ldap.NO_SUCH_OBJECT:
-            raise ValueError(f"OU '{dn}' not found")
+            raise ValueError(f"OU '{dn}' not found") from None
 
         # Check for children
         children = conn.search_s(dn, ldap.SCOPE_ONELEVEL, "(objectClass=*)", ["dn"])

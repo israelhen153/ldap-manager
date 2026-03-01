@@ -5,13 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ldap-manager"
 version = "1.0.0"
-description = "LDAP server management CLI — replaces legacy bash tooling"
+description = "CLI power tools for sysadmins who run OpenLDAP and refuse to touch a web UI."
 requires-python = ">=3.10"
 dependencies = [
     "python-ldap>=3.4",
     "click>=8.1",
     "pyyaml>=6.0",
     "passlib>=1.7",
+]
+authors = [
+    { name = "Israel Hen", email = "israelhen153@gmail.com" }
 ]
 
 [project.optional-dependencies]
@@ -27,6 +30,12 @@ dev = [
 
 [project.scripts]
 ldap-manager = "ldap_manager.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/israelhen153/ldap-manager"
+Repository = "https://github.com/israelhen153/ldap-manager"
+Issues = "https://github.com/israelhen153/ldap-manager/issues"
+Documentation = "https://github.com/israelhen153/ldap-manager#readme"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
