@@ -1,0 +1,115 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ldap-manager"
+version = "1.0.0"
+description = "LDAP server management CLI — replaces legacy bash tooling"
+requires-python = ">=3.10"
+dependencies = [
+    "python-ldap>=3.4",
+    "click>=8.1",
+    "pyyaml>=6.0",
+    "passlib>=1.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-mock",
+    "pytest-cov",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "types-PyYAML",
+    "bandit>=1.7",
+]
+
+[project.scripts]
+ldap-manager = "ldap_manager.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+    "--cov=ldap_manager",
+    "--cov-report=term-missing",
+    "--cov-report=html:htmlcov",
+    "--cov-report=xml:coverage.xml",
+    "--cov-branch",
+    "--junitxml=test-results.xml",
+    "-v",
+]
+
+[tool.coverage.run]
+source = ["ldap_manager"]
+branch = true
+omit = [
+    "ldap_manager/__main__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+fail_under = 40
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__",
+    "raise NotImplementedError",
+    "pass",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 130
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "N",     # pep8-naming
+    "UP",    # pyupgrade
+    "B",     # flake8-bugbear
+    "SIM",   # flake8-simplify
+    "S",     # flake8-bandit (security)
+    "RET",   # flake8-return
+    "PTH",   # flake8-use-pathlib
+    "RUF",   # ruff-specific
+]
+ignore = [
+    "PTH123",  # open() vs Path.open() — style preference
+    "SIM102",  # nested if vs combined — readability preference with click.confirm
+    "SIM105",  # contextlib.suppress vs try/except/pass — less readable
+    "SIM108",  # ternary operator — the if/else is clearer
+    "S105",    # hardcoded passwords in config defaults — they're example values
+    "S107",    # same, function defaults
+    "S108",    # /tmp path in config default — intentional
+    "S110",    # try/except/pass without logging — intentional in ppolicy
+    "S324",    # sha1 usage — it's SSHA for LDAP, not a security choice we control
+    "RUF005",  # list concatenation vs unpacking — doesn't matter
+    "RUF043",  # regex metacharacters in pytest match — works fine
+    "S101",   # assert in tests is fine
+    "S603",   # subprocess calls are intentional (slapcat/slapadd)
+    "S607",   # partial executable path (slapcat/slapadd)
+    "B008",   # function calls in argument defaults (Click does this)
+    "RET505", # unnecessary else after return — readability preference
+    "UP007",  # X | Y union syntax — keep Optional for 3.10 compat
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "B011"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+ignore_missing_imports = true
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+skips = ["B101", "B603", "B607", "B404", "B108", "B110", "B604", "B324"]
+
+[tool.setuptools.packages.find]
+include = ["ldap_manager*"]
