@@ -250,8 +250,7 @@ class BackupManager:
         final = subprocess.run(["pgrep", "-x", "slapd"], capture_output=True)
         if final.returncode == 0:
             raise RuntimeError(
-                "slapd is still running after SIGKILL. Something is very wrong. "
-                "Investigate manually before attempting restore."
+                "slapd is still running after SIGKILL. Something is very wrong. Investigate manually before attempting restore."
             )
 
     # ── RETENTION ──────────────────────────────────────────────────

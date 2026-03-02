@@ -321,7 +321,6 @@ def user_dump(
     mgr = UserManager(cfg)
     payload: Any = None
 
-
     extra_attrs = None
     if attrs:
         extra_attrs = [a.strip() for a in attrs.split(",") if a.strip()]
