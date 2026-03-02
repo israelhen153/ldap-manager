@@ -1,7 +1,7 @@
 # ldap-manager
 
 # Tests:
-[![CI](https://github.com/israelhen153/ldap-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/israelhen153/ldap-manager/actions/workflows/ci.yml)
+[![CI](https://github.com/israelhen153/ldap-manager/actions/workflows/makefile.yml/badge.svg)](https://github.com/israelhen153/ldap-manager/actions/workflows/makefile.yml)
 
 
 **CLI power tools for sysadmins who run OpenLDAP and refuse to touch a web UI.**
