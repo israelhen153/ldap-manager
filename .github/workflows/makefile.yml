@@ -24,7 +24,9 @@ jobs:
                 pip3 install --upgrade pip setuptools wheel
                 pip3 install -e ".[dev]"
       - name: Lint
-        run: make lint
+        run: |
+                make lint-fix
+                make lint
       - name: Type check
         run: make typecheck
       - name: Security scan
