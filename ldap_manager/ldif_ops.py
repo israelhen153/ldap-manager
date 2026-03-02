@@ -137,7 +137,6 @@ def _needs_base64(text: str) -> bool:
     return text[-1] == " "
 
 
-
 def import_ldif(
     conn: LDAPObject,
     ldif_path: Path,
