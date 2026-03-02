@@ -20,7 +20,7 @@ jobs:
           dnf install -y python3 python3-pip python3-devel \
             openldap-devel cyrus-sasl-devel gcc make
       - name: Install package
-        run: pip3 install -e ".[dev]" --break-system-packages
+        run: pip3 install -e ".[dev]"
       - name: Lint
         run: make lint
       - name: Type check
