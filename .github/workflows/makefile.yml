@@ -106,7 +106,7 @@ jobs:
           CLI power tools for sysadmins who run OpenLDAP and refuse to touch a web UI.
 
           %prep
-          %setup -n ldap_manager-%{version} || %setup -n ldap-manager-%{version}
+          %setup -n ldap-manager-%{version} || %setup -n ldap-manager-%{version}
 
           %build
           %py3_build
