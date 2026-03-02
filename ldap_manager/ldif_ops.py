@@ -134,7 +134,7 @@ def _needs_base64(text: str) -> bool:
     if any(ord(c) < 32 or ord(c) == 127 for c in text):
         return True
     # Trailing space
-    return True if text[-1] == " " else Flase
+    return True if text[-1] == " " else False
 
 
 def import_ldif(
