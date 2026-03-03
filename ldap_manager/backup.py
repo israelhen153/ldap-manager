@@ -19,7 +19,7 @@ import os
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import BackupConfig
@@ -51,7 +51,7 @@ class BackupManager:
             compress: gzip the LDIF files
             tag: optional tag appended to the backup directory name
         """
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         dir_name = f"ldap_backup_{timestamp}"
         if tag:
             dir_name += f"_{tag}"
