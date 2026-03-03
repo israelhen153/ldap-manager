@@ -98,7 +98,7 @@ jobs:
           URL:            https://github.com/israelhen153/ldap-manager
           Source0:        ldap_manager-%{version}.tar.gz
           BuildArch:      noarch
-          BuildRequires:  python3.11-devel python3.11-setuptools
+          BuildRequires:  python3.11-devel python3.11-setuptools python3.11-pip
           Requires:       python3-ldap python3-pyyaml python3-click python3-passlib
           Requires:       openldap-clients openldap-servers
 
@@ -109,10 +109,9 @@ jobs:
           %setup -n ldap_manager-%{version}
 
           %build
-          %py3_build
 
           %install
-          %py3_install
+          python3.11 -m pip install . --root=%{buildroot} --no-deps --ignore-installed
 
           %files
           %license LICENSE
