@@ -91,7 +91,7 @@ jobs:
 
           cat > ~/rpmbuild/SPECS/ldap-manager.spec << 'SPEC'
           Name:           ldap-manager
-          Version:        1.0.7
+          Version:        ${_version}
           Release:        1%{?dist}
           Summary:        CLI power tools for OpenLDAP administration
           License:        MIT
@@ -106,7 +106,7 @@ jobs:
           CLI power tools for sysadmins who run OpenLDAP and refuse to touch a web UI.
 
           %prep
-          %setup -n ldap_manager-%{version} || %setup -n ldap-manager-%{version}
+          %setup -n ldap_manager-%{version}
 
           %build
           %py3_build
