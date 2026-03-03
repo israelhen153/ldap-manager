@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ldap-manager"
-version = "1.0.8"
+version = "1.0.9"
 description = "CLI power tools for sysadmins who run OpenLDAP and refuse to touch a web UI."
 requires-python = ">=3.10"
 dependencies = [
