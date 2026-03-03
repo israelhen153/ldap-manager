@@ -91,7 +91,7 @@ jobs:
 
           cat > ~/rpmbuild/SPECS/ldap-manager.spec <<- SPEC
           Name:           ldap-manager
-          Version:        %{_version}
+          Version:        1.0.11
           Release:        1%{?dist}
           Summary:        CLI power tools for OpenLDAP administration
           License:        MIT
@@ -101,20 +101,18 @@ jobs:
           BuildRequires:  python3.11-devel python3.11-setuptools python3.11-pip
           Requires:       python3-ldap python3-pyyaml python3-click python3-passlib
           Requires:       openldap-clients openldap-servers
-
-          %define py3_sitedir 
-
+          
           %description
           CLI power tools for sysadmins who run OpenLDAP and refuse to touch a web UI.
-
+          
           %prep
           %setup -n ldap_manager-%{version}
-
+          
           %build
-
+          
           %install
           python3.11 -m pip install . --root=%{buildroot} --no-deps --ignore-installed --prefix=/usr
-
+          
           %files
           %license LICENSE
           /usr/lib/python3.11/site-packages/ldap_manager/
