@@ -21,6 +21,7 @@ import getpass
 import logging
 import os
 import sys
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -315,7 +316,7 @@ def user_dump(
 
     """
     import json
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
@@ -336,7 +337,7 @@ def user_dump(
     if with_metadata:
         payload = {
             "metadata": {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "timestamp": datetime.now(UTC).isoformat(),
                 "source": cfg.ldap.uri,
                 "base_dn": cfg.ldap.users_ou,
                 "total_users": len(users),

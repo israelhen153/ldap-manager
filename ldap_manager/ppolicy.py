@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import ldap
@@ -282,7 +282,7 @@ class PPasswordManager:
             if status is None:
                 continue
 
-            if expired_only and not (status.expires and status.expires < datetime.now(timezone.utc).isoformat()):
+            if expired_only and not (status.expires and status.expires < datetime.now(UTC).isoformat()):
                 continue
             if locked_only and not status.locked:
                 continue
@@ -299,6 +299,6 @@ def _parse_generalized_time(gt: str) -> datetime | None:
         gt = gt.split(".")[0]
         if gt.endswith("Z"):
             gt = gt[:-1]
-        return datetime.strptime(gt, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+        return datetime.strptime(gt, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
     except (ValueError, IndexError):
         return None
