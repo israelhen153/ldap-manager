@@ -102,6 +102,8 @@ jobs:
           Requires:       python3-ldap python3-pyyaml python3-click python3-passlib
           Requires:       openldap-clients openldap-servers
 
+          %define py3_sitedir /usr/lib/python3.11/site-packages
+
           %description
           CLI power tools for sysadmins who run OpenLDAP and refuse to touch a web UI.
 
@@ -116,8 +118,8 @@ jobs:
           %files
           %license LICENSE
           %doc README.md
-          %{python3_sitelib}/ldap_manager/
-          %{python3_sitelib}/ldap_manager-*.egg-info/
+          %{py3_sitedir}/ldap_manager/
+          %{py3_sitedir}/ldap_manager-*.egg-info/
           %{_bindir}/ldap-manager
           SPEC
 
