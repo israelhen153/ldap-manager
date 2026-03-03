@@ -89,7 +89,7 @@ jobs:
           mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
           cp dist/*.tar.gz ~/rpmbuild/SOURCES/
 
-          cat > ~/rpmbuild/SPECS/ldap-manager.spec << 'SPEC'
+          cat > ~/rpmbuild/SPECS/ldap-manager.spec <<- SPEC
           Name:           ldap-manager
           Version:        %{_version}
           Release:        1%{?dist}
@@ -102,7 +102,7 @@ jobs:
           Requires:       python3-ldap python3-pyyaml python3-click python3-passlib
           Requires:       openldap-clients openldap-servers
 
-          %define py3_sitedir /usr/lib/python3.11/site-packages
+          %define py3_sitedir 
 
           %description
           CLI power tools for sysadmins who run OpenLDAP and refuse to touch a web UI.
@@ -113,13 +113,12 @@ jobs:
           %build
 
           %install
-          python3.11 -m pip install . --root=%{buildroot} --no-deps --ignore-installed
+          python3.11 -m pip install . --root=%{buildroot} --no-deps --ignore-installed --prefix=/usr
 
           %files
           %license LICENSE
-          %doc README.md
-          %{py3_sitedir}/ldap_manager/
-          %{py3_sitedir}/ldap_manager-*.egg-info/
+          /usr/lib/python3.11/site-packages/ldap_manager/
+          /usr/lib/python3.11/site-packages/ldap_manager-*.dist-info/
           %{_bindir}/ldap-manager
           SPEC
 
