@@ -307,6 +307,12 @@ def user_dump(
         ldap-manager user dump --enabled --attrs uid,mail,cn
 
         ldap-manager user dump --with-metadata | jq '.users[] | .uid'
+
+    \b
+    OUTPUT FORMAT
+        Default: JSON array of user objects.
+        With --with-metadata: wrapped in {"metadata": {...}, "users": [...]}.
+        With --compact: no indentation.
     """
     import json
     from datetime import datetime
@@ -325,7 +331,7 @@ def user_dump(
             disabled_only=disabled,
             extra_attrs=extra_attrs,
         )
-
+    payload: Any
     if with_metadata:
         payload = {
             "metadata": {
@@ -437,6 +443,22 @@ def user_create(
     \b
     Override anything on the CLI:
         ldap-manager user create jdoe --cn "John Doe" --sn Doe --mail custom@mail.com
+
+    \b
+    EXAMPLES
+        ldap-manager user create jdoe
+
+        ldap-manager user create jdoe --cn "John Doe" --mail john@example.com
+
+        ldap-manager user create jdoe --gid 5000 --shell /bin/zsh
+
+        ldap-manager user create jdoe --password "S3cret!" --no-generate
+
+    \b
+    NOTES
+        UID number is auto-assigned from the range in config.
+        Mail is auto-derived from uid@mail_domain if mail_domain is set.
+        Home directory defaults to home_prefix/uid.
     """
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
@@ -461,7 +483,6 @@ def user_create(
             gid_number=gid_number,
             home_directory=home,
             login_shell=shell,
-            password=pw,
         )
 
     click.echo(f"Created user: {dn}")
@@ -982,7 +1003,6 @@ def passwd_all(
             cfg,
             enabled_only=not include_disabled,
             output_file=output,
-            password_length=length,
             dry_run=dry_run,
         )
 
