@@ -40,7 +40,6 @@ from .users import UserManager
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
-        filename="/var/log/ldap.log",
         level=level,
         format="%(asctime)s [%(levelname)-7s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
@@ -95,6 +94,7 @@ def main(ctx: click.Context, config_path: str | None, verbose: bool, debug: bool
     _setup_logging(verbose or debug)
     ctx.ensure_object(dict)
     ctx.obj["config"] = load_config(config_path)
+    ctx.obj["config_path"] = config_path
 
     if debug or os.environ.get("LDAP_MANAGER_DEBUG"):
         ctx.obj["debug"] = True
@@ -307,20 +307,12 @@ def user_dump(
         ldap-manager user dump --enabled --attrs uid,mail,cn
 
         ldap-manager user dump --with-metadata | jq '.users[] | .uid'
-
-    \b
-    OUTPUT FORMAT
-        Default: JSON array of user objects.
-        With --with-metadata: wrapped in {"metadata": {...}, "users": [...]}.
-        With --compact: no indentation.
-
     """
     import json
     from datetime import datetime
 
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
-    payload: Any = None
 
     extra_attrs = None
     if attrs:
@@ -445,22 +437,6 @@ def user_create(
     \b
     Override anything on the CLI:
         ldap-manager user create jdoe --cn "John Doe" --sn Doe --mail custom@mail.com
-
-    \b
-    EXAMPLES
-        ldap-manager user create jdoe
-
-        ldap-manager user create jdoe --cn "John Doe" --mail john@example.com
-
-        ldap-manager user create jdoe --gid 5000 --shell /bin/zsh
-
-        ldap-manager user create jdoe --password "S3cret!" --no-generate
-
-    \b
-    NOTES
-        UID number is auto-assigned from the range in config.
-        Mail is auto-derived from uid@mail_domain if mail_domain is set.
-        Home directory defaults to home_prefix/uid.
     """
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
@@ -485,6 +461,7 @@ def user_create(
             gid_number=gid_number,
             home_directory=home,
             login_shell=shell,
+            password=pw,
         )
 
     click.echo(f"Created user: {dn}")
@@ -1005,6 +982,7 @@ def passwd_all(
             cfg,
             enabled_only=not include_disabled,
             output_file=output,
+            password_length=length,
             dry_run=dry_run,
         )
 
@@ -1977,10 +1955,87 @@ def audit_status(ctx: click.Context) -> None:
 
     if logger.path.is_file():
         size_kb = logger.path.stat().st_size / 1024
-        with logger.path.open() as f:
+        with open(logger.path) as f:
             lines = sum(1 for _ in f)
         click.echo(f"Size:     {size_kb:.1f} KB")
         click.echo(f"Entries:  {lines}")
+
+
+@main.group()
+@click.pass_context
+def config(ctx: click.Context) -> None:
+    """Configuration — validate settings and connectivity.
+
+    \b
+    SUBCOMMANDS
+        check     Validate config, connectivity, and directory structure
+
+    \b
+    EXAMPLES
+        ldap-manager config check
+        ldap-manager config check --json
+    """
+
+
+@config.command("check")
+@click.option("--json", "as_json", is_flag=True, help="Output as JSON.")
+@click.pass_context
+def config_check(ctx: click.Context, as_json: bool) -> None:
+    """Validate config, LDAP connectivity, and directory structure.
+
+    \b
+    Runs these checks in order:
+        1. Config file exists and parses
+        2. LDAP URI is reachable (TCP connect)
+        3. Bind credentials work
+        4. Base DN exists
+        5. Users OU exists
+        6. Groups OU exists
+
+    \b
+    Checks that depend on a failed earlier check are skipped automatically.
+    Exit code 0 = all passed, 1 = any failed.
+
+    \b
+    EXAMPLES
+        ldap-manager config check
+        ldap-manager -c /etc/ldap-manager/config.yaml config check
+        ldap-manager config check --json
+    """
+    from .check import run_all_checks
+
+    cfg = ctx.obj["config"]
+    config_path = ctx.obj.get("config_path")
+    results = run_all_checks(cfg, config_path=config_path)
+
+    if as_json:
+        _json_out([r.to_dict() for r in results])
+    else:
+        passed = 0
+        failed = 0
+        skipped = 0
+
+        for r in results:
+            if r.skipped:
+                status = "SKIP"
+                skipped += 1
+            elif r.passed:
+                status = "OK"
+                passed += 1
+            else:
+                status = "FAIL"
+                failed += 1
+
+            click.echo(f"  {r.name:<14} {r.detail:<45} {status}")
+            if r.error and not r.skipped:
+                click.echo(f"               {r.error}")
+
+        click.echo()
+        if failed == 0:
+            click.echo(f"All checks passed ({passed} passed, {skipped} skipped).")
+        else:
+            click.echo(f"{failed} check(s) failed ({passed} passed, {skipped} skipped).")
+            ctx.exit(1)
 
 
 if __name__ == "__main__":
