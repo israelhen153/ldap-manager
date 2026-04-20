@@ -26,7 +26,7 @@ If you manage OpenLDAP, your options are:
 |------|---------|
 | `ldapmodify` / `ldapsearch` | LDIF by hand for every operation |
 | phpLDAPadmin | Abandoned, PHP, browser-only |
-| LDAP Account Manager | Java, $$$, overkill for CLI admins |
+| LDAP Account Manager (LAM) | Web UI (PHP, GPL); mature but not designed for scripting or CI |
 | Your 15 bash scripts | Fragile, no error handling, no dry-run |
 
 **ldap-manager** is the missing CLI. One tool, tab completion, JSON output, dry-run on destructive operations, and actual tests.
