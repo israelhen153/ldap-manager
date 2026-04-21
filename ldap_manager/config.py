@@ -142,12 +142,51 @@ class AuditConfig:
 
 
 @dataclass
+class SchemaConfig:
+    """Directory-schema profile knobs.
+
+    Normalises attribute and object-class names that drift between
+    OpenLDAP-flavored POSIX directories, Active Directory, and 389ds.
+    Held alongside :class:`LDAPConfig` (not inside it) because swapping
+    directory type is a bigger decision than swapping server host.
+
+    Defaults match the OpenLDAP POSIX profile — the historical
+    behaviour of this codebase. Stage B consumers pick a profile via
+    :func:`ldap_manager.backends.schemas.get_schema_profile`; direct
+    construction is supported for users with one-off schemas.
+
+    Fields:
+      * ``user_id_attr`` — login-name attribute (``uid`` on POSIX,
+        ``sAMAccountName`` on AD).
+      * ``user_object_class`` — the user object class (``inetOrgPerson``
+        on POSIX, ``user`` on AD).
+      * ``disable_mechanism`` — how "disable user" is modelled. Either
+        ``login_shell`` (flip ``loginShell`` to nologin — POSIX) or
+        ``uac_bit`` (flip bit in ``userAccountControl`` — AD).
+      * ``group_membership_attr`` — the attribute that records group
+        members. ``memberUid`` for POSIX groups, ``member`` for groups
+        of names (AD, 389ds).
+    """
+
+    user_id_attr: str = "uid"
+    user_object_class: str = "inetOrgPerson"
+    disable_mechanism: str = "login_shell"
+    group_membership_attr: str = "memberUid"
+
+
+@dataclass
 class Config:
     ldap: LDAPConfig = field(default_factory=LDAPConfig)
     users: UsersConfig = field(default_factory=UsersConfig)
     backup: BackupConfig = field(default_factory=BackupConfig)
     password: PasswordConfig = field(default_factory=PasswordConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
+    # ── Backend selection (Stage B) ──────────────────────────────
+    # "openldap" keeps the python-ldap code path for OpenLDAP-only
+    # deployments; "generic" routes through ldap3 and lets the
+    # ``schema`` block target AD, 389ds, or custom directories.
+    backend: str = "openldap"
+    schema: SchemaConfig = field(default_factory=SchemaConfig)
 
 
 def load_config(config_path: str | Path | None = None) -> Config:
@@ -180,4 +219,6 @@ def load_config(config_path: str | Path | None = None) -> Config:
         backup=BackupConfig(**raw.get("backup", {})),
         password=PasswordConfig(**raw.get("password", {})),
         audit=AuditConfig(**raw.get("audit", {})),
+        backend=raw.get("backend", "openldap"),
+        schema=SchemaConfig(**raw.get("schema", {})),
     )

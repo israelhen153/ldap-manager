@@ -27,7 +27,7 @@ from typing import Any
 
 import click
 
-from .backends.openldap import OpenLDAPBackend
+from .backends import build_backend
 from .backup import BackupManager, DatabasePopulatedError
 from .batch import load_structured_file as load_batch_file
 from .batch import run_batch
@@ -65,10 +65,23 @@ def _json_out(data: Any) -> None:
 
 @click.group()
 @click.option("-c", "--config", "config_path", default=None, help="Path to config YAML file")
+@click.option(
+    "--backend",
+    "backend_override",
+    type=click.Choice(["openldap", "generic"]),
+    default=None,
+    help="Override ``backend`` from config (openldap=python-ldap, generic=ldap3).",
+)
 @click.option("-v", "--verbose", is_flag=True, help="Enable debug logging")
 @click.option("--debug", is_flag=True, hidden=True, help="Show full tracebacks on errors")
 @click.pass_context
-def main(ctx: click.Context, config_path: str | None, verbose: bool, debug: bool) -> None:
+def main(
+    ctx: click.Context,
+    config_path: str | None,
+    backend_override: str | None,
+    verbose: bool,
+    debug: bool,
+) -> None:
     """LDAP server management CLI.
 
     \b
@@ -84,6 +97,7 @@ def main(ctx: click.Context, config_path: str | None, verbose: bool, debug: bool
         ldap-manager -c /etc/ldap-manager/config.yaml user list
         ldap-manager -v backup dump --tag pre-migration
         ldap-manager passwd-all --dry-run
+        ldap-manager --backend generic user list
 
     \b
     ENVIRONMENT VARIABLES
@@ -94,7 +108,13 @@ def main(ctx: click.Context, config_path: str | None, verbose: bool, debug: bool
     """
     _setup_logging(verbose or debug)
     ctx.ensure_object(dict)
-    ctx.obj["config"] = load_config(config_path)
+    cfg = load_config(config_path)
+    # ``--backend`` is a per-invocation override — handy for testing AD
+    # against a config.yaml that defaults to openldap, or vice versa,
+    # without editing the file.
+    if backend_override is not None:
+        cfg.backend = backend_override
+    ctx.obj["config"] = cfg
 
     if debug or os.environ.get("LDAP_MANAGER_DEBUG"):
         ctx.obj["debug"] = True
@@ -158,7 +178,7 @@ def user_list(ctx: click.Context, enabled: bool, disabled: bool, as_json: bool) 
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         users = mgr.list_users(backend, enabled_only=enabled, disabled_only=disabled)
 
     if as_json:
@@ -244,7 +264,7 @@ def user_search(
     mgr = UserManager(cfg)
 
     try:
-        with OpenLDAPBackend(cfg.ldap) as backend:
+        with build_backend(cfg) as backend:
             users = mgr.search_users(
                 backend,
                 ldap_filter=ldap_filter,
@@ -326,7 +346,7 @@ def user_dump(
     if attrs:
         extra_attrs = [a.strip() for a in attrs.split(",") if a.strip()]
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         users = mgr.dump_users(
             backend,
             enabled_only=enabled,
@@ -383,7 +403,7 @@ def user_get(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         u = mgr.get_user(backend, uid)
 
     if u is None:
@@ -473,7 +493,7 @@ def user_create(
             click.echo("Passwords do not match.", err=True)
             sys.exit(1)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         dn, generated_pw = mgr.create_user(
             backend,
             uid,
@@ -532,7 +552,7 @@ def user_update(ctx: click.Context, uid: str, attrs: tuple[str, ...]) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         mgr.update_user(backend, uid, **parsed)
 
     click.echo(f"Updated user '{uid}': {list(parsed.keys())}")
@@ -565,7 +585,7 @@ def user_delete(ctx: click.Context, uid: str, yes: bool, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         user = mgr.get_user(backend, uid)
         mgr.delete_user(backend, uid)
 
@@ -596,7 +616,7 @@ def user_disable(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         mgr.disable_user(backend, uid)
         user = mgr.get_user(backend, uid)
 
@@ -626,7 +646,7 @@ def user_enable(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         mgr.enable_user(backend, uid)
         user = mgr.get_user(backend, uid)
 
@@ -662,7 +682,7 @@ def user_passwd(ctx: click.Context, uid: str) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         mgr.set_password(backend, uid, pw)
 
     click.echo(f"Password changed for '{uid}'.")
@@ -732,7 +752,7 @@ def batch_cmd(
 
     cfg = ctx.obj["config"]
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         result = run_batch(
             backend,
             cfg,
@@ -1036,7 +1056,7 @@ def passwd_all(
     cfg = ctx.obj["config"]
 
     try:
-        with OpenLDAPBackend(cfg.ldap) as backend:
+        with build_backend(cfg) as backend:
             result = bulk_password_reset(
                 backend,
                 cfg,
@@ -1103,7 +1123,7 @@ def group_list(ctx: click.Context, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         groups = mgr.list_groups(backend)
 
     if as_json:
@@ -1139,7 +1159,7 @@ def group_get(ctx: click.Context, cn: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         g = mgr.get_group(backend, cn)
 
     if g is None:
@@ -1184,7 +1204,7 @@ def group_create(ctx: click.Context, cn: str, gid_number: int, description: str,
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         dn = mgr.create_group(backend, cn, gid_number, description=description, posix=not group_of_names)
 
     if as_json:
@@ -1213,7 +1233,7 @@ def group_delete(ctx: click.Context, cn: str, yes: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         mgr.delete_group(backend, cn)
 
     click.echo(f"Deleted group '{cn}'.")
@@ -1240,7 +1260,7 @@ def group_add_member(ctx: click.Context, group_cn: str, uid: str) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         mgr.add_member(backend, group_cn, uid)
 
     click.echo(f"Added '{uid}' to group '{group_cn}'.")
@@ -1264,7 +1284,7 @@ def group_remove_member(ctx: click.Context, group_cn: str, uid: str) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         mgr.remove_member(backend, group_cn, uid)
 
     click.echo(f"Removed '{uid}' from group '{group_cn}'.")
@@ -1285,7 +1305,7 @@ def group_members(ctx: click.Context, cn: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         g = mgr.get_group(backend, cn)
 
     if g is None:
@@ -1319,7 +1339,7 @@ def group_user_groups(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         groups = mgr.get_user_groups(backend, uid)
 
     if as_json:
@@ -1482,7 +1502,7 @@ def user_ssh_key_list(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = SSHKeyManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         keys = mgr.list_keys(backend, uid)
 
     if as_json:
@@ -1532,7 +1552,7 @@ def user_ssh_key_add(ctx: click.Context, uid: str, key_or_file: str) -> None:
     cfg = ctx.obj["config"]
     mgr = SSHKeyManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         mgr.add_key(backend, uid, key)
 
     click.echo(f"Added SSH key to user '{uid}'.")
@@ -1555,7 +1575,7 @@ def user_ssh_key_remove(ctx: click.Context, uid: str, index: int) -> None:
     cfg = ctx.obj["config"]
     mgr = SSHKeyManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         removed = mgr.remove_key(backend, uid, index)
 
     click.echo(f"Removed key [{index}]: {removed[:60]}...")
@@ -1602,7 +1622,7 @@ def user_export(ctx: click.Context, output: str | None, fmt: str, enabled: bool,
         from .ldif_ops import export_ldif
 
         out_path = Path(output) if output else None
-        with OpenLDAPBackend(cfg.ldap) as backend:
+        with build_backend(cfg) as backend:
             ldif_str = export_ldif(
                 backend,
                 cfg,
@@ -1620,7 +1640,7 @@ def user_export(ctx: click.Context, output: str | None, fmt: str, enabled: bool,
     else:
         # JSON — reuse existing dump
         mgr = UserManager(cfg)
-        with OpenLDAPBackend(cfg.ldap) as backend:
+        with build_backend(cfg) as backend:
             users = mgr.dump_users(backend, enabled_only=enabled, disabled_only=disabled)
         _json_out(users)
 
@@ -1648,7 +1668,7 @@ def ldif_import(ctx: click.Context, ldif_file: str, dry_run: bool, stop_on_error
 
     cfg = ctx.obj["config"]
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         counts = import_ldif(
             backend,
             Path(ldif_file),
@@ -1702,7 +1722,7 @@ def tree_show(ctx: click.Context, base: str | None, depth: int, as_json: bool) -
     cfg = ctx.obj["config"]
     mgr = TreeManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         entries = mgr.tree(backend, base_dn=base, max_depth=depth)
 
     if as_json:
@@ -1735,7 +1755,7 @@ def tree_list_ous(ctx: click.Context, base: str | None, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = TreeManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         ous = mgr.list_ous(backend, base_dn=base)
 
     if as_json:
@@ -1770,7 +1790,7 @@ def tree_create_ou(ctx: click.Context, ou_name: str, parent: str | None, descrip
     cfg = ctx.obj["config"]
     mgr = TreeManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         dn = mgr.create_ou(backend, ou_name, parent_dn=parent, description=description)
 
     click.echo(f"Created OU: {dn}")
@@ -1807,7 +1827,7 @@ def tree_delete_ou(ctx: click.Context, dn: str, recursive: bool, yes: bool) -> N
     cfg = ctx.obj["config"]
     mgr = TreeManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         count = mgr.delete_ou(backend, dn, recursive=recursive)
 
     click.echo(f"Deleted {count} entries.")
@@ -1857,7 +1877,7 @@ def ppolicy_status(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = PPasswordManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         st = mgr.get_user_status(backend, uid)
 
     if st is None:
@@ -1895,7 +1915,7 @@ def ppolicy_config(ctx: click.Context, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = PPasswordManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         pol = mgr.get_policy(backend)
 
     if pol is None:
@@ -1937,7 +1957,7 @@ def ppolicy_check_all(ctx: click.Context, expired: bool, locked: bool, as_json: 
     cfg = ctx.obj["config"]
     mgr = PPasswordManager(cfg)
 
-    with OpenLDAPBackend(cfg.ldap) as backend:
+    with build_backend(cfg) as backend:
         statuses = mgr.check_all_users(backend, expired_only=expired, locked_only=locked)
 
     if as_json:

@@ -1,6 +1,27 @@
 # ldap-manager configuration
 # Copy to /etc/ldap-manager/config.yaml or ~/.ldap-manager.yaml
 
+# ── Backend selection ─────────────────────────────────────────────
+# Which backend drives the LDAP client library:
+#   openldap (default) — python-ldap. OpenLDAP-only; required for
+#                        ``backup`` (slapcat) and server overlay probes.
+#   generic            — ldap3. Works against OpenLDAP, Active Directory,
+#                        or 389ds. Required when targeting non-OpenLDAP
+#                        directories or running on hosts without libldap.
+# backend: openldap
+
+# ── Schema profile ────────────────────────────────────────────────
+# Attribute and object-class names that differ between directory
+# flavours. Defaults below match OpenLDAP POSIX (the historical
+# behaviour of this tool). Override only when backend=generic points at
+# a non-OpenLDAP directory. See ldap_manager/backends/schemas.py for
+# ready-made profiles (openldap_posix, active_directory, 389ds).
+# schema:
+#   user_id_attr: uid              # sAMAccountName on AD
+#   user_object_class: inetOrgPerson  # user on AD
+#   disable_mechanism: login_shell    # uac_bit on AD
+#   group_membership_attr: memberUid  # member on AD / 389ds
+
 ldap:
   # Server URI — use ldaps:// in production, never ldap:// over WAN
   uri: "ldap://localhost:389"
