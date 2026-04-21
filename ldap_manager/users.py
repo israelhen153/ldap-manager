@@ -1,8 +1,9 @@
 """User CRUD operations against LDAP.
 
-All public methods accept a bound LDAPObject (from LDAPConnection context).
-This keeps the connection lifecycle outside this module — easier to test,
-easier to compose operations within a single connection.
+All public methods accept a bound Backend (from the OpenLDAPBackend
+context manager). Keeping the connection lifecycle outside this module
+makes tests trivial and lets a single connection compose multiple
+operations.
 """
 
 from __future__ import annotations
@@ -13,8 +14,8 @@ from typing import Any
 
 import ldap
 import ldap.modlist as modlist
-from ldap.ldapobject import LDAPObject
 
+from .backends import Backend
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -91,7 +92,7 @@ class UserManager:
     # ── DUMP (JSON export) ─────────────────────────────────────────
     def dump_users(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         *,
         enabled_only: bool = False,
         disabled_only: bool = False,
@@ -104,7 +105,7 @@ class UserManager:
         Binary values (userPassword, jpegPhoto, etc.) are base64-encoded.
 
         Args:
-            conn: Bound LDAP connection
+            backend: Bound LDAP backend
             enabled_only: Skip disabled users
             disabled_only: Skip enabled users
             extra_attrs: If set, fetch ONLY these attrs (plus uid/loginShell
@@ -124,7 +125,7 @@ class UserManager:
 
         search_filter = "(objectClass=posixAccount)"
         try:
-            results = conn.search_s(
+            results = backend.search(
                 self._lcfg.users_ou,
                 ldap.SCOPE_SUBTREE,
                 search_filter,
@@ -172,7 +173,7 @@ class UserManager:
     # ── SEARCH ──────────────────────────────────────────────────────
     def search_users(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         *,
         ldap_filter: str | None = None,
         uid: str | None = None,
@@ -189,7 +190,7 @@ class UserManager:
         All conditions are ANDed together.
 
         Args:
-            conn: Bound LDAP connection
+            backend: Bound LDAP backend
             ldap_filter: Raw LDAP filter, e.g. "(description=contractor*)"
             uid: Wildcard match on uid, e.g. "j*" or "jdoe"
             cn: Wildcard match on cn
@@ -225,7 +226,7 @@ class UserManager:
         log.debug("Search filter: %s", search_filter)
 
         try:
-            results = conn.search_s(self._lcfg.users_ou, ldap.SCOPE_SUBTREE, search_filter, _USER_ATTRS)
+            results = backend.search(self._lcfg.users_ou, ldap.SCOPE_SUBTREE, search_filter, _USER_ATTRS)
         except ldap.NO_SUCH_OBJECT:
             return []
         except ldap.FILTER_ERROR as exc:
@@ -245,11 +246,11 @@ class UserManager:
         return sorted(users, key=lambda u: u.uid)
 
     # ── READ ───────────────────────────────────────────────────────
-    def get_user(self, conn: LDAPObject, uid: str) -> UserEntry | None:
+    def get_user(self, backend: Backend, uid: str) -> UserEntry | None:
         """Fetch a single user by uid. Returns None if not found."""
         search_filter = f"(&(objectClass=posixAccount)(uid={_escape(uid)}))"
         try:
-            results = conn.search_s(self._lcfg.users_ou, ldap.SCOPE_SUBTREE, search_filter, _USER_ATTRS)
+            results = backend.search(self._lcfg.users_ou, ldap.SCOPE_SUBTREE, search_filter, _USER_ATTRS)
         except ldap.NO_SUCH_OBJECT:
             return None
 
@@ -263,7 +264,7 @@ class UserManager:
 
     def list_users(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         *,
         enabled_only: bool = False,
         disabled_only: bool = False,
@@ -271,7 +272,7 @@ class UserManager:
         """List all users under the users OU."""
         search_filter = "(objectClass=posixAccount)"
         try:
-            results = conn.search_s(self._lcfg.users_ou, ldap.SCOPE_SUBTREE, search_filter, _USER_ATTRS)
+            results = backend.search(self._lcfg.users_ou, ldap.SCOPE_SUBTREE, search_filter, _USER_ATTRS)
         except ldap.NO_SUCH_OBJECT:
             return []
 
@@ -291,7 +292,7 @@ class UserManager:
     # ── CREATE ─────────────────────────────────────────────────────
     def create_user(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         uid: str,
         cn: str | None = None,
         sn: str | None = None,
@@ -316,7 +317,7 @@ class UserManager:
 
         Returns (dn, generated_password) — password is None if not generated.
         """
-        if self.get_user(conn, uid) is not None:
+        if self.get_user(backend, uid) is not None:
             raise ValueError(f"User '{uid}' already exists")
 
         # Derive defaults from config
@@ -327,7 +328,7 @@ class UserManager:
         if not mail and self._ucfg.mail_domain:
             mail = f"{uid}@{self._ucfg.mail_domain}"
         if uid_number is None:
-            uid_number = self._next_uid_number(conn)
+            uid_number = self._next_uid_number(backend)
         if gid_number is None:
             gid_number = self._ucfg.default_gid
         if home_directory is None:
@@ -361,92 +362,92 @@ class UserManager:
         if mail:
             entry["mail"] = [mail.encode()]
         if generated_password:
-            entry["userPassword"] = [_hash_password(generated_password, self._resolve_scheme(conn))]
+            entry["userPassword"] = [_hash_password(generated_password, self._resolve_scheme(backend))]
 
         add_list = modlist.addModlist(entry)
-        conn.add_s(dn, add_list)
+        backend.add(dn, add_list)
         log.info("Created user %s (%s)", uid, dn)
         return dn, explicit_password
 
     # ── UPDATE ─────────────────────────────────────────────────────
-    def update_user(self, conn: LDAPObject, uid: str, **attrs: str | int) -> None:
+    def update_user(self, backend: Backend, uid: str, **attrs: str | int) -> None:
         """Update arbitrary attributes on a user entry.
 
         Accepts keyword arguments mapping attribute names to new values.
-        Example: update_user(conn, "jdoe", mail="new@example.com", loginShell="/bin/zsh")
+        Example: update_user(backend, "jdoe", mail="new@example.com", loginShell="/bin/zsh")
         """
-        user = self.get_user(conn, uid)
+        user = self.get_user(backend, uid)
         if user is None:
             raise ValueError(f"User '{uid}' not found")
 
-        mod_list = []
+        mod_list: list[tuple[int, str, list[bytes] | None]] = []
         for attr_name, value in attrs.items():
             mod_list.append((ldap.MOD_REPLACE, attr_name, [str(value).encode()]))
 
         if not mod_list:
             return
 
-        conn.modify_s(user.dn, mod_list)
+        backend.modify(user.dn, mod_list)
         log.info("Updated user %s: %s", uid, list(attrs.keys()))
 
     # ── DELETE ─────────────────────────────────────────────────────
-    def delete_user(self, conn: LDAPObject, uid: str) -> None:
+    def delete_user(self, backend: Backend, uid: str) -> None:
         """Delete a user entry."""
-        user = self.get_user(conn, uid)
+        user = self.get_user(backend, uid)
         if user is None:
             raise ValueError(f"User '{uid}' not found")
 
-        conn.delete_s(user.dn)
+        backend.delete(user.dn)
         log.info("Deleted user %s (%s)", uid, user.dn)
 
     # ── ENABLE / DISABLE ──────────────────────────────────────────
-    def disable_user(self, conn: LDAPObject, uid: str) -> None:
+    def disable_user(self, backend: Backend, uid: str) -> None:
         """Disable user by setting loginShell to nologin."""
-        user = self.get_user(conn, uid)
+        user = self.get_user(backend, uid)
         if user is None:
             raise ValueError(f"User '{uid}' not found")
         if not user.enabled:
             log.warning("User %s is already disabled", uid)
             return
 
-        conn.modify_s(
+        backend.modify(
             user.dn,
             [(ldap.MOD_REPLACE, "loginShell", [self._ucfg.disabled_shell.encode()])],
         )
         log.info("Disabled user %s (shell -> %s)", uid, self._ucfg.disabled_shell)
 
-    def enable_user(self, conn: LDAPObject, uid: str) -> None:
+    def enable_user(self, backend: Backend, uid: str) -> None:
         """Re-enable user by restoring default loginShell."""
-        user = self.get_user(conn, uid)
+        user = self.get_user(backend, uid)
         if user is None:
             raise ValueError(f"User '{uid}' not found")
         if user.enabled:
             log.warning("User %s is already enabled", uid)
             return
 
-        conn.modify_s(
+        backend.modify(
             user.dn,
             [(ldap.MOD_REPLACE, "loginShell", [self._ucfg.default_shell.encode()])],
         )
         log.info("Enabled user %s (shell -> %s)", uid, self._ucfg.default_shell)
 
     # ── PASSWORD ──────────────────────────────────────────────────
-    def set_password(self, conn: LDAPObject, uid: str, password: str) -> None:
+    def set_password(self, backend: Backend, uid: str, password: str) -> None:
         """Set a user's password.
 
         The hash scheme is resolved from ``cfg.password.hash_scheme``:
         ``"auto"`` (the default) triggers cn=config detection on first
-        call per connection; any other value is used verbatim.
+        call per backend; any other value is used verbatim.
         """
-        user = self.get_user(conn, uid)
+        user = self.get_user(backend, uid)
         if user is None:
             raise ValueError(f"User '{uid}' not found")
 
-        hashed = _hash_password(password, self._resolve_scheme(conn))
-        conn.modify_s(user.dn, [(ldap.MOD_REPLACE, "userPassword", [hashed])])
+        hashed = _hash_password(password, self._resolve_scheme(backend))
+        backend.modify(user.dn, [(ldap.MOD_REPLACE, "userPassword", [hashed])])
         log.info("Password changed for user %s", uid)
 
-    def _resolve_scheme(self, conn: LDAPObject) -> str:
+    def _resolve_scheme(self, backend: Backend) -> str:
         """Turn ``cfg.password.hash_scheme`` into a concrete scheme.
 
         Import is lazy — at module import time passwords.py imports
@@ -456,12 +457,12 @@ class UserManager:
         """
         from .passwords import resolve_hash_scheme
 
-        return resolve_hash_scheme(self._cfg, conn)
+        return resolve_hash_scheme(self._cfg, backend)
 
     # ── INTERNAL ──────────────────────────────────────────────────
-    def _next_uid_number(self, conn: LDAPObject) -> int:
+    def _next_uid_number(self, backend: Backend) -> int:
         """Find the next available uidNumber in the configured range."""
-        results = conn.search_s(
+        results = backend.search(
             self._lcfg.users_ou,
             ldap.SCOPE_SUBTREE,
             "(objectClass=posixAccount)",

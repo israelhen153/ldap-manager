@@ -32,8 +32,8 @@ from pathlib import Path
 from weakref import WeakKeyDictionary
 
 import ldap
-from ldap.ldapobject import LDAPObject
 
+from .backends import Backend
 from .config import Config
 from .users import UserManager
 
@@ -76,10 +76,12 @@ _SCHEME_ALIASES = {
     "ssha": "ssha",
 }
 
-# Per-connection cache for detect_hash_support. WeakKeyDictionary lets
-# the entry evaporate when the LDAPObject is garbage-collected — we don't
-# want to hold connections alive just to cache a string.
-_DETECT_CACHE: WeakKeyDictionary[LDAPObject, str] = WeakKeyDictionary()
+# Per-backend cache for detect_hash_support. WeakKeyDictionary lets the
+# entry evaporate when the Backend instance is garbage-collected — we
+# don't want to hold backends alive just to cache a string. MagicMock,
+# OpenLDAPBackend, and the _FakeConn used by the detection tests are all
+# weakly referenceable, so no fallback is needed.
+_DETECT_CACHE: WeakKeyDictionary[Backend, str] = WeakKeyDictionary()
 
 
 def _normalize_scheme(scheme: str) -> str:
@@ -95,12 +97,12 @@ def _normalize_scheme(scheme: str) -> str:
     return _SCHEME_ALIASES[key]
 
 
-def detect_hash_support(conn: LDAPObject) -> str:
+def detect_hash_support(backend: Backend) -> str:
     """Return the strongest password hash scheme the server advertises.
 
     Probes ``cn=config`` for ``olcPasswordHash`` and picks the strongest
     scheme (per :data:`_SCHEME_PRIORITY`) that both the server supports
-    AND we can actually emit. Result is cached per-connection so repeated
+    AND we can actually emit. Result is cached per-backend so repeated
     ``auto`` resolves in one session don't re-probe.
 
     Failure modes that return ``"ssha"`` (never raise):
@@ -111,7 +113,7 @@ def detect_hash_support(conn: LDAPObject) -> str:
     When ``argon2id`` would otherwise win but ``argon2-cffi`` isn't
     importable, it's skipped — we can't hash what we can't produce.
     """
-    cached = _DETECT_CACHE.get(conn)
+    cached = _DETECT_CACHE.get(backend)
     if cached is not None:
         return cached
 
@@ -126,7 +128,7 @@ def detect_hash_support(conn: LDAPObject) -> str:
     # always safe.
     found_tags: set[str] = set()
     try:
-        results = conn.search_s(
+        results = backend.search(
             "cn=config",
             ldap.SCOPE_SUBTREE,
             "(olcPasswordHash=*)",
@@ -143,7 +145,7 @@ def detect_hash_support(conn: LDAPObject) -> str:
             "Could not probe cn=config for olcPasswordHash (%s); falling back to SSHA for hash scheme detection.",
             exc,
         )
-        _DETECT_CACHE[conn] = "ssha"
+        _DETECT_CACHE[backend] = "ssha"
         return "ssha"
 
     supported = {_TAG_TO_SCHEME[tag] for tag in found_tags if tag in _TAG_TO_SCHEME}
@@ -152,7 +154,7 @@ def detect_hash_support(conn: LDAPObject) -> str:
     # SSHA is always safe — every OpenLDAP build ships it.
     if not supported:
         log.info("cn=config returned no recognised olcPasswordHash values; defaulting to SSHA.")
-        _DETECT_CACHE[conn] = "ssha"
+        _DETECT_CACHE[backend] = "ssha"
         return "ssha"
 
     # Walk the priority list; pick the strongest we can actually emit.
@@ -166,16 +168,16 @@ def detect_hash_support(conn: LDAPObject) -> str:
                 "'pip install argon2-cffi' to use it."
             )
             continue
-        _DETECT_CACHE[conn] = scheme
+        _DETECT_CACHE[backend] = scheme
         return scheme
 
     # Server only advertised things we can't produce (shouldn't really
     # happen — SSHA should always be in the supported set).
-    _DETECT_CACHE[conn] = "ssha"
+    _DETECT_CACHE[backend] = "ssha"
     return "ssha"
 
 
-def resolve_hash_scheme(cfg: Config, conn: LDAPObject) -> str:
+def resolve_hash_scheme(cfg: Config, backend: Backend) -> str:
     """Resolve ``cfg.password.hash_scheme`` to a concrete scheme name.
 
     Precedence:
@@ -187,7 +189,7 @@ def resolve_hash_scheme(cfg: Config, conn: LDAPObject) -> str:
     """
     raw = (cfg.password.hash_scheme or "auto").strip()
     if raw.lower() == "auto":
-        return detect_hash_support(conn)
+        return detect_hash_support(backend)
     return _normalize_scheme(raw)
 
 
@@ -298,7 +300,7 @@ def _generate_password(length: int) -> str:
 
 
 def bulk_password_reset(
-    conn: LDAPObject,
+    backend: Backend,
     cfg: Config,
     *,
     enabled_only: bool = True,
@@ -314,7 +316,7 @@ def bulk_password_reset(
     dropped — only the aggregate result is returned.
 
     Args:
-        conn: Bound LDAP connection.
+        backend: Bound LDAP backend.
         cfg: Application config.
         enabled_only: If True, skip disabled users (loginShell = nologin).
         output_file: Path for the CSV output, or None for summary-only.
@@ -344,7 +346,7 @@ def bulk_password_reset(
                 "Tighten permissions (e.g. chmod o-r) and retry."
             )
 
-    users = user_mgr.list_users(conn, enabled_only=enabled_only)
+    users = user_mgr.list_users(backend, enabled_only=enabled_only)
     if not users:
         log.warning("No users found matching criteria")
         raise RuntimeError("No users found to reset")
@@ -364,7 +366,7 @@ def bulk_password_reset(
         new_password = _generate_password(pw_length)
         try:
             if not dry_run:
-                user_mgr.set_password(conn, user.uid, new_password)
+                user_mgr.set_password(backend, user.uid, new_password)
             results.append((user.uid, user.cn, new_password))
             log.debug("Password %s for %s", "generated" if dry_run else "changed", user.uid)
         except Exception as exc:
