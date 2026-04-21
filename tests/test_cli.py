@@ -96,6 +96,11 @@ class TestMainHelp:
         assert result.exit_code == 0
         assert "OUTPUT FILE" in result.output
         assert "EXAMPLES" in result.output
+        # Hardening must be documented, not just implemented.
+        assert "--confirm-plaintext" in result.output
+        assert "liability" in result.output
+        assert "0600" in result.output
+        assert "world-readable" in result.output or "parent directory" in result.output
 
     def test_user_search_help(self, runner: CliRunner) -> None:
         result = runner.invoke(main, ["user", "search", "--help"])
@@ -285,3 +290,44 @@ class TestPasswdAllCLI:
         assert str(wide) in result.output
         assert not out.exists()
         conn.modify_s.assert_not_called()
+
+    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.load_config")
+    def test_length_flag_threads_through_to_bulk_reset(
+        self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
+    ) -> None:
+        """--length N must change the length of passwords written to the manifest."""
+        import csv
+
+        conn = MagicMock()
+        conn.search_s.return_value = [
+            make_ldap_entry("alice", "Alice", "A", 10001),
+            make_ldap_entry("bob", "Bob", "B", 10002),
+        ]
+        mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
+        mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
+
+        from ldap_manager.config import Config
+
+        mock_cfg.return_value = Config()
+
+        out = tmp_path / "pw.csv"
+        result = runner.invoke(
+            main,
+            [
+                "passwd-all",
+                "--yes",
+                "--dry-run",
+                "--output",
+                str(out),
+                "--confirm-plaintext",
+                "--length",
+                "33",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        with open(out) as f:
+            rows = list(csv.reader(f))[1:]
+        assert rows, "manifest should have at least one row"
+        for row in rows:
+            assert len(row[2]) == 33

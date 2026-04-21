@@ -136,3 +136,31 @@ class TestBulkReset:
 
         assert not output.exists(), "file must not be created"
         mock_conn.modify_s.assert_not_called()
+
+    def test_length_parameter_controls_password_length(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
+        """Explicit length= must override cfg.password.generated_length."""
+        mock_conn.search_s.return_value = [
+            make_ldap_entry("alice", "Alice", "A", 10001),
+            make_ldap_entry("bob", "Bob", "B", 10002),
+        ]
+        output = tmp_path / "pw.csv"
+        # cfg default is 20; request something very different.
+        bulk_password_reset(mock_conn, cfg, output_file=output, dry_run=True, length=42)
+
+        with open(output) as f:
+            rows = list(csv.reader(f))[1:]  # skip header
+        assert rows, "expected at least one row"
+        for row in rows:
+            assert len(row[2]) == 42, f"expected length 42, got {len(row[2])}: {row[2]!r}"
+
+    def test_length_defaults_to_config(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
+        """When length is None, use cfg.password.generated_length."""
+        mock_conn.search_s.return_value = [
+            make_ldap_entry("alice", "Alice", "A", 10001),
+        ]
+        output = tmp_path / "pw.csv"
+        bulk_password_reset(mock_conn, cfg, output_file=output, dry_run=True, length=None)
+
+        with open(output) as f:
+            rows = list(csv.reader(f))[1:]
+        assert len(rows[0][2]) == cfg.password.generated_length

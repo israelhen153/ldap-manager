@@ -956,7 +956,12 @@ def backup_list(ctx: click.Context, as_json: bool) -> None:
     is_flag=True,
     help="Required with --output. Explicit acknowledgement that writing plaintext passwords to disk is a liability.",
 )
-@click.option("--length", type=int, default=None, help="Generated password length")
+@click.option(
+    "--length",
+    type=int,
+    default=None,
+    help="Generated password length. Defaults to password.generated_length from config.",
+)
 @click.option("--dry-run", is_flag=True, help="Generate passwords but don't modify LDAP")
 @click.option("--yes", is_flag=True, help="Skip confirmation")
 @click.pass_context
@@ -1038,6 +1043,7 @@ def passwd_all(
                 enabled_only=not include_disabled,
                 output_file=output,
                 dry_run=dry_run,
+                length=length,
             )
     except InsecureOutputDirError as exc:
         click.echo(f"error: {exc}", err=True)
