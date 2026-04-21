@@ -14,11 +14,14 @@ from __future__ import annotations
 
 import json
 import logging
+import logging.handlers
 import os
+import sys
 from abc import ABC, abstractmethod
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib import request as urllib_request
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +89,109 @@ class FileSink(Sink):
         line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
         with open(self._path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+
+
+class StdoutSink(Sink):
+    """Write each event as a JSON line to stdout.
+
+    Handy for container workflows where stdout is harvested by the
+    platform. No buffering beyond the standard Python stream.
+    """
+
+    def emit(self, event: dict[str, Any]) -> None:
+        line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+
+
+# Facility name → SysLogHandler constant. Covers the codes most
+# operators actually use for application audit streams.
+_SYSLOG_FACILITIES: dict[str, int] = {
+    "user": logging.handlers.SysLogHandler.LOG_USER,
+    "daemon": logging.handlers.SysLogHandler.LOG_DAEMON,
+    "auth": logging.handlers.SysLogHandler.LOG_AUTH,
+    "authpriv": logging.handlers.SysLogHandler.LOG_AUTHPRIV,
+    "local0": logging.handlers.SysLogHandler.LOG_LOCAL0,
+    "local1": logging.handlers.SysLogHandler.LOG_LOCAL1,
+    "local2": logging.handlers.SysLogHandler.LOG_LOCAL2,
+    "local3": logging.handlers.SysLogHandler.LOG_LOCAL3,
+    "local4": logging.handlers.SysLogHandler.LOG_LOCAL4,
+    "local5": logging.handlers.SysLogHandler.LOG_LOCAL5,
+    "local6": logging.handlers.SysLogHandler.LOG_LOCAL6,
+    "local7": logging.handlers.SysLogHandler.LOG_LOCAL7,
+}
+
+
+class SyslogSink(Sink):
+    """Send JSON-serialized events to syslog.
+
+    Wraps ``logging.handlers.SysLogHandler``. Each event becomes one
+    syslog message. ``address`` defaults to ``/dev/log`` on Unix, as
+    does the underlying handler.
+    """
+
+    def __init__(
+        self,
+        facility: str = "local3",
+        address: str | tuple[str, int] | None = None,
+    ) -> None:
+        facility_code = _SYSLOG_FACILITIES.get(facility.lower())
+        if facility_code is None:
+            raise ValueError(f"Unknown syslog facility {facility!r}. Known: {sorted(_SYSLOG_FACILITIES)}")
+        handler_kwargs: dict[str, Any] = {"facility": facility_code}
+        if address is not None:
+            handler_kwargs["address"] = address
+        self._handler = logging.handlers.SysLogHandler(**handler_kwargs)
+        self._logger = logging.getLogger(f"ldap_manager.audit.syslog.{id(self)}")
+        self._logger.addHandler(self._handler)
+        self._logger.setLevel(logging.INFO)
+        # Don't let parent loggers (e.g. root) double-emit the audit events.
+        self._logger.propagate = False
+
+    def emit(self, event: dict[str, Any]) -> None:
+        line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+        self._logger.info(line)
+
+    def close(self) -> None:
+        self._logger.removeHandler(self._handler)
+        self._handler.close()
+
+
+class HTTPSink(Sink):
+    """POST events as JSON to an HTTP endpoint.
+
+    Uses ``urllib.request`` to avoid a new dependency. Headers default
+    to ``Content-Type: application/json``; callers can supply extras
+    (e.g. ``Authorization``) via the ``headers`` kwarg.
+    """
+
+    def __init__(
+        self,
+        url: str,
+        timeout_seconds: float = 5.0,
+        headers: dict[str, str] | None = None,
+    ) -> None:
+        self._url = url
+        self._timeout = timeout_seconds
+        merged = {"Content-Type": "application/json"}
+        if headers:
+            merged.update(headers)
+        self._headers = merged
+
+    def emit(self, event: dict[str, Any]) -> None:
+        body = json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        # URL is operator-configured in YAML; http/https sinks are the
+        # whole point of this class, so urllib's scheme-blacklist warning
+        # does not apply.
+        req = urllib_request.Request(  # noqa: S310
+            self._url,
+            data=body,
+            headers=self._headers,
+            method="POST",
+        )
+        with urllib_request.urlopen(req, timeout=self._timeout):  # noqa: S310  # nosec B310
+            # Drain the response so the connection is released.
+            pass
 
 
 class AuditLogger:
