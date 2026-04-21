@@ -27,11 +27,11 @@ from typing import Any
 
 import click
 
+from .backends.openldap import OpenLDAPBackend
 from .backup import BackupManager, DatabasePopulatedError
 from .batch import load_structured_file as load_batch_file
 from .batch import run_batch
 from .config import load_config
-from .connection import LDAPConnection
 from .groups import GroupManager
 from .passwords import InsecureOutputDirError, bulk_password_reset
 from .users import UserManager
@@ -158,8 +158,8 @@ def user_list(ctx: click.Context, enabled: bool, disabled: bool, as_json: bool) 
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        users = mgr.list_users(conn, enabled_only=enabled, disabled_only=disabled)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        users = mgr.list_users(backend, enabled_only=enabled, disabled_only=disabled)
 
     if as_json:
         import json
@@ -244,9 +244,9 @@ def user_search(
     mgr = UserManager(cfg)
 
     try:
-        with LDAPConnection(cfg.ldap) as conn:
+        with OpenLDAPBackend(cfg.ldap) as backend:
             users = mgr.search_users(
-                conn,
+                backend,
                 ldap_filter=ldap_filter,
                 uid=uid,
                 cn=cn,
@@ -326,9 +326,9 @@ def user_dump(
     if attrs:
         extra_attrs = [a.strip() for a in attrs.split(",") if a.strip()]
 
-    with LDAPConnection(cfg.ldap) as conn:
+    with OpenLDAPBackend(cfg.ldap) as backend:
         users = mgr.dump_users(
-            conn,
+            backend,
             enabled_only=enabled,
             disabled_only=disabled,
             extra_attrs=extra_attrs,
@@ -383,8 +383,8 @@ def user_get(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        u = mgr.get_user(conn, uid)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        u = mgr.get_user(backend, uid)
 
     if u is None:
         click.echo(f"User '{uid}' not found.", err=True)
@@ -473,9 +473,9 @@ def user_create(
             click.echo("Passwords do not match.", err=True)
             sys.exit(1)
 
-    with LDAPConnection(cfg.ldap) as conn:
+    with OpenLDAPBackend(cfg.ldap) as backend:
         dn, generated_pw = mgr.create_user(
-            conn,
+            backend,
             uid,
             cn,
             sn,
@@ -532,8 +532,8 @@ def user_update(ctx: click.Context, uid: str, attrs: tuple[str, ...]) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        mgr.update_user(conn, uid, **parsed)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        mgr.update_user(backend, uid, **parsed)
 
     click.echo(f"Updated user '{uid}': {list(parsed.keys())}")
 
@@ -565,9 +565,9 @@ def user_delete(ctx: click.Context, uid: str, yes: bool, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        user = mgr.get_user(conn, uid)
-        mgr.delete_user(conn, uid)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        user = mgr.get_user(backend, uid)
+        mgr.delete_user(backend, uid)
 
     if as_json and user:
         _json_out({"action": "deleted", "user": user})
@@ -596,9 +596,9 @@ def user_disable(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        mgr.disable_user(conn, uid)
-        user = mgr.get_user(conn, uid)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        mgr.disable_user(backend, uid)
+        user = mgr.get_user(backend, uid)
 
     if as_json and user:
         _json_out({"action": "disabled", "user": user})
@@ -626,9 +626,9 @@ def user_enable(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        mgr.enable_user(conn, uid)
-        user = mgr.get_user(conn, uid)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        mgr.enable_user(backend, uid)
+        user = mgr.get_user(backend, uid)
 
     if as_json and user:
         _json_out({"action": "enabled", "user": user})
@@ -662,8 +662,8 @@ def user_passwd(ctx: click.Context, uid: str) -> None:
     cfg = ctx.obj["config"]
     mgr = UserManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        mgr.set_password(conn, uid, pw)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        mgr.set_password(backend, uid, pw)
 
     click.echo(f"Password changed for '{uid}'.")
 
@@ -732,9 +732,9 @@ def batch_cmd(
 
     cfg = ctx.obj["config"]
 
-    with LDAPConnection(cfg.ldap) as conn:
+    with OpenLDAPBackend(cfg.ldap) as backend:
         result = run_batch(
-            conn,
+            backend,
             cfg,
             action,
             file_path,
@@ -1036,9 +1036,9 @@ def passwd_all(
     cfg = ctx.obj["config"]
 
     try:
-        with LDAPConnection(cfg.ldap) as conn:
+        with OpenLDAPBackend(cfg.ldap) as backend:
             result = bulk_password_reset(
-                conn,
+                backend,
                 cfg,
                 enabled_only=not include_disabled,
                 output_file=output,
@@ -1103,8 +1103,8 @@ def group_list(ctx: click.Context, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        groups = mgr.list_groups(conn)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        groups = mgr.list_groups(backend)
 
     if as_json:
         _json_out([g.to_dict() for g in groups])
@@ -1139,8 +1139,8 @@ def group_get(ctx: click.Context, cn: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        g = mgr.get_group(conn, cn)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        g = mgr.get_group(backend, cn)
 
     if g is None:
         click.echo(f"Group '{cn}' not found.", err=True)
@@ -1184,8 +1184,8 @@ def group_create(ctx: click.Context, cn: str, gid_number: int, description: str,
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        dn = mgr.create_group(conn, cn, gid_number, description=description, posix=not group_of_names)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        dn = mgr.create_group(backend, cn, gid_number, description=description, posix=not group_of_names)
 
     if as_json:
         _json_out({"action": "created", "dn": dn, "cn": cn, "gid_number": gid_number})
@@ -1213,8 +1213,8 @@ def group_delete(ctx: click.Context, cn: str, yes: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        mgr.delete_group(conn, cn)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        mgr.delete_group(backend, cn)
 
     click.echo(f"Deleted group '{cn}'.")
 
@@ -1240,8 +1240,8 @@ def group_add_member(ctx: click.Context, group_cn: str, uid: str) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        mgr.add_member(conn, group_cn, uid)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        mgr.add_member(backend, group_cn, uid)
 
     click.echo(f"Added '{uid}' to group '{group_cn}'.")
 
@@ -1264,8 +1264,8 @@ def group_remove_member(ctx: click.Context, group_cn: str, uid: str) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        mgr.remove_member(conn, group_cn, uid)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        mgr.remove_member(backend, group_cn, uid)
 
     click.echo(f"Removed '{uid}' from group '{group_cn}'.")
 
@@ -1285,8 +1285,8 @@ def group_members(ctx: click.Context, cn: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        g = mgr.get_group(conn, cn)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        g = mgr.get_group(backend, cn)
 
     if g is None:
         click.echo(f"Group '{cn}' not found.", err=True)
@@ -1319,8 +1319,8 @@ def group_user_groups(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = GroupManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        groups = mgr.get_user_groups(conn, uid)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        groups = mgr.get_user_groups(backend, uid)
 
     if as_json:
         _json_out({"uid": uid, "groups": [g.to_dict() for g in groups]})
@@ -1482,8 +1482,8 @@ def user_ssh_key_list(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = SSHKeyManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        keys = mgr.list_keys(conn, uid)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        keys = mgr.list_keys(backend, uid)
 
     if as_json:
         _json_out({"uid": uid, "keys": keys, "count": len(keys)})
@@ -1532,8 +1532,8 @@ def user_ssh_key_add(ctx: click.Context, uid: str, key_or_file: str) -> None:
     cfg = ctx.obj["config"]
     mgr = SSHKeyManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        mgr.add_key(conn, uid, key)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        mgr.add_key(backend, uid, key)
 
     click.echo(f"Added SSH key to user '{uid}'.")
 
@@ -1555,8 +1555,8 @@ def user_ssh_key_remove(ctx: click.Context, uid: str, index: int) -> None:
     cfg = ctx.obj["config"]
     mgr = SSHKeyManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        removed = mgr.remove_key(conn, uid, index)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        removed = mgr.remove_key(backend, uid, index)
 
     click.echo(f"Removed key [{index}]: {removed[:60]}...")
 
@@ -1602,9 +1602,9 @@ def user_export(ctx: click.Context, output: str | None, fmt: str, enabled: bool,
         from .ldif_ops import export_ldif
 
         out_path = Path(output) if output else None
-        with LDAPConnection(cfg.ldap) as conn:
+        with OpenLDAPBackend(cfg.ldap) as backend:
             ldif_str = export_ldif(
-                conn,
+                backend,
                 cfg,
                 output=out_path,
                 enabled_only=enabled,
@@ -1620,8 +1620,8 @@ def user_export(ctx: click.Context, output: str | None, fmt: str, enabled: bool,
     else:
         # JSON — reuse existing dump
         mgr = UserManager(cfg)
-        with LDAPConnection(cfg.ldap) as conn:
-            users = mgr.dump_users(conn, enabled_only=enabled, disabled_only=disabled)
+        with OpenLDAPBackend(cfg.ldap) as backend:
+            users = mgr.dump_users(backend, enabled_only=enabled, disabled_only=disabled)
         _json_out(users)
 
 
@@ -1648,9 +1648,9 @@ def ldif_import(ctx: click.Context, ldif_file: str, dry_run: bool, stop_on_error
 
     cfg = ctx.obj["config"]
 
-    with LDAPConnection(cfg.ldap) as conn:
+    with OpenLDAPBackend(cfg.ldap) as backend:
         counts = import_ldif(
-            conn,
+            backend,
             Path(ldif_file),
             dry_run=dry_run,
             stop_on_error=stop_on_error,
@@ -1702,8 +1702,8 @@ def tree_show(ctx: click.Context, base: str | None, depth: int, as_json: bool) -
     cfg = ctx.obj["config"]
     mgr = TreeManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        entries = mgr.tree(conn, base_dn=base, max_depth=depth)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        entries = mgr.tree(backend, base_dn=base, max_depth=depth)
 
     if as_json:
         _json_out(entries)
@@ -1735,8 +1735,8 @@ def tree_list_ous(ctx: click.Context, base: str | None, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = TreeManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        ous = mgr.list_ous(conn, base_dn=base)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        ous = mgr.list_ous(backend, base_dn=base)
 
     if as_json:
         _json_out([o.to_dict() for o in ous])
@@ -1770,8 +1770,8 @@ def tree_create_ou(ctx: click.Context, ou_name: str, parent: str | None, descrip
     cfg = ctx.obj["config"]
     mgr = TreeManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        dn = mgr.create_ou(conn, ou_name, parent_dn=parent, description=description)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        dn = mgr.create_ou(backend, ou_name, parent_dn=parent, description=description)
 
     click.echo(f"Created OU: {dn}")
 
@@ -1807,8 +1807,8 @@ def tree_delete_ou(ctx: click.Context, dn: str, recursive: bool, yes: bool) -> N
     cfg = ctx.obj["config"]
     mgr = TreeManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        count = mgr.delete_ou(conn, dn, recursive=recursive)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        count = mgr.delete_ou(backend, dn, recursive=recursive)
 
     click.echo(f"Deleted {count} entries.")
 
@@ -1857,8 +1857,8 @@ def ppolicy_status(ctx: click.Context, uid: str, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = PPasswordManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        st = mgr.get_user_status(conn, uid)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        st = mgr.get_user_status(backend, uid)
 
     if st is None:
         click.echo(f"User '{uid}' not found.", err=True)
@@ -1895,8 +1895,8 @@ def ppolicy_config(ctx: click.Context, as_json: bool) -> None:
     cfg = ctx.obj["config"]
     mgr = PPasswordManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        pol = mgr.get_policy(conn)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        pol = mgr.get_policy(backend)
 
     if pol is None:
         click.echo("No password policy found. Is the ppolicy overlay loaded?")
@@ -1937,8 +1937,8 @@ def ppolicy_check_all(ctx: click.Context, expired: bool, locked: bool, as_json: 
     cfg = ctx.obj["config"]
     mgr = PPasswordManager(cfg)
 
-    with LDAPConnection(cfg.ldap) as conn:
-        statuses = mgr.check_all_users(conn, expired_only=expired, locked_only=locked)
+    with OpenLDAPBackend(cfg.ldap) as backend:
+        statuses = mgr.check_all_users(backend, expired_only=expired, locked_only=locked)
 
     if as_json:
         _json_out([s.to_dict() for s in statuses])

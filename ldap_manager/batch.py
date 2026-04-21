@@ -25,8 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ldap.ldapobject import LDAPObject
-
+from .backends import Backend
 from .config import Config
 from .users import UserManager
 
@@ -126,7 +125,7 @@ def load_structured_file(path: str | Path) -> list[dict[str, Any]]:
 
 
 def run_batch(
-    conn: LDAPObject,
+    backend: Backend,
     cfg: Config,
     action: str,
     file_path: str | Path,
@@ -142,7 +141,7 @@ def run_batch(
     For create/update: file must be .json or .csv with per-user attributes.
 
     Args:
-        conn: Bound LDAP connection
+        backend: Bound LDAP backend
         cfg: Application config
         action: One of: create, update, delete, enable, disable
         file_path: Path to the input file
@@ -169,13 +168,13 @@ def run_batch(
                 if stop_on_error:
                     break
                 continue
-            _run_one(mgr, conn, action, uid, result, dry_run, data=entry)
+            _run_one(mgr, backend, action, uid, result, dry_run, data=entry)
             if stop_on_error and result.failed:
                 break
     else:
         uids = load_uid_list(file_path)
         for uid in uids:
-            _run_one(mgr, conn, action, uid, result, dry_run)
+            _run_one(mgr, backend, action, uid, result, dry_run)
             if stop_on_error and result.failed:
                 break
 
@@ -184,7 +183,7 @@ def run_batch(
 
 def _run_one(
     mgr: UserManager,
-    conn: LDAPObject,
+    backend: Backend,
     action: str,
     uid: str,
     result: BatchResult,
@@ -203,7 +202,7 @@ def _run_one(
         if action == "create":
             assert data is not None
             _, generated_pw = mgr.create_user(
-                conn,
+                backend,
                 uid,
                 cn=data.get("cn"),
                 sn=data.get("sn"),
@@ -226,13 +225,13 @@ def _run_one(
             if not attrs:
                 result.record_skip(uid, "no attributes to change")
                 return
-            mgr.update_user(conn, uid, **attrs)
+            mgr.update_user(backend, uid, **attrs)
         elif action == "delete":
-            mgr.delete_user(conn, uid)
+            mgr.delete_user(backend, uid)
         elif action == "enable":
-            mgr.enable_user(conn, uid)
+            mgr.enable_user(backend, uid)
         elif action == "disable":
-            mgr.disable_user(conn, uid)
+            mgr.disable_user(backend, uid)
 
         result.record_success(uid)
 

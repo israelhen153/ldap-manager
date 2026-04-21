@@ -103,42 +103,42 @@ class TestBatchResult:
 
 
 class TestRunBatch:
-    def test_disable_batch(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
+    def test_disable_batch(self, cfg: Config, mock_backend: MagicMock, tmp_path: Path) -> None:
         f = tmp_path / "users.txt"
         f.write_text("alice\nbob\n")
         # Each disable call does a get_user search then a modify
-        mock_conn.search_s.return_value = [make_ldap_entry("alice")]
+        mock_backend.search.return_value = [make_ldap_entry("alice")]
 
-        result = run_batch(mock_conn, cfg, "disable", f)
+        result = run_batch(mock_backend, cfg, "disable", f)
         assert result.total == 2
 
-    def test_dry_run_no_writes(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
+    def test_dry_run_no_writes(self, cfg: Config, mock_backend: MagicMock, tmp_path: Path) -> None:
         f = tmp_path / "users.txt"
         f.write_text("alice\n")
-        result = run_batch(mock_conn, cfg, "disable", f, dry_run=True)
+        result = run_batch(mock_backend, cfg, "disable", f, dry_run=True)
         assert result.succeeded == 1
-        mock_conn.modify_s.assert_not_called()
+        mock_backend.modify.assert_not_called()
 
-    def test_invalid_action_raises(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
+    def test_invalid_action_raises(self, cfg: Config, mock_backend: MagicMock, tmp_path: Path) -> None:
         f = tmp_path / "users.txt"
         f.write_text("alice\n")
         with pytest.raises(ValueError, match="Invalid action"):
-            run_batch(mock_conn, cfg, "nuke", f)
+            run_batch(mock_backend, cfg, "nuke", f)
 
-    def test_stop_on_error(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
+    def test_stop_on_error(self, cfg: Config, mock_backend: MagicMock, tmp_path: Path) -> None:
         f = tmp_path / "users.txt"
         f.write_text("alice\nbob\ncharlie\n")
         # First call fails
-        mock_conn.search_s.return_value = []  # user not found
+        mock_backend.search.return_value = []  # user not found
 
-        result = run_batch(mock_conn, cfg, "disable", f, stop_on_error=True)
+        result = run_batch(mock_backend, cfg, "disable", f, stop_on_error=True)
         # Should stop after first failure
         assert result.failed >= 1
         assert result.total < 3
 
-    def test_create_from_json(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
+    def test_create_from_json(self, cfg: Config, mock_backend: MagicMock, tmp_path: Path) -> None:
         f = tmp_path / "new.json"
         f.write_text(json.dumps([{"uid": "newuser"}]))
-        mock_conn.search_s.side_effect = [[], []]  # get_user, _next_uid
-        result = run_batch(mock_conn, cfg, "create", f)
+        mock_backend.search.side_effect = [[], []]  # get_user, _next_uid
+        result = run_batch(mock_backend, cfg, "create", f)
         assert result.succeeded == 1

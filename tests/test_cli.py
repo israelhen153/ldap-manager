@@ -133,11 +133,11 @@ class TestMainHelp:
 
 
 class TestUserListCLI:
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_list_empty(self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner) -> None:
         conn = MagicMock()
-        conn.search_s.return_value = []
+        conn.search.return_value = []
         mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
         mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -148,11 +148,11 @@ class TestUserListCLI:
         result = runner.invoke(main, ["user", "list"])
         assert "No users found" in result.output
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_list_json(self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner) -> None:
         conn = MagicMock()
-        conn.search_s.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
+        conn.search.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
         mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
         mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -166,11 +166,11 @@ class TestUserListCLI:
 
 
 class TestUserGetCLI:
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_get_not_found(self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner) -> None:
         conn = MagicMock()
-        conn.search_s.return_value = []
+        conn.search.return_value = []
         mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
         mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -186,13 +186,13 @@ class TestUserGetCLI:
 class TestPasswdAllCLI:
     """Coverage for the hardening behaviours on `passwd-all`."""
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_summary_only_no_file_no_password_in_stdout(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
     ) -> None:
         conn = MagicMock()
-        conn.search_s.return_value = [
+        conn.search.return_value = [
             make_ldap_entry("alice", "Alice", "A", 10001),
             make_ldap_entry("bob", "Bob", "B", 10002),
         ]
@@ -207,21 +207,21 @@ class TestPasswdAllCLI:
         assert result.exit_code == 0, result.output
         assert "2 users rotated" in result.output
         assert "zero passwords revealed" in result.output
-        # Every modify_s call took a hashed password; sanity-check none of those
+        # Every modify call took a hashed password; sanity-check none of those
         # raw plaintexts leaked to stdout.
-        for call in conn.modify_s.call_args_list:
+        for call in conn.modify.call_args_list:
             mods = call.args[1]
             for _, _, vals in mods:
                 for v in vals:
                     assert v.decode("utf-8", errors="ignore") not in result.output
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_output_without_confirm_plaintext_is_rejected(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
     ) -> None:
         conn = MagicMock()
-        conn.search_s.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
+        conn.search.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
         mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
         mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -234,15 +234,15 @@ class TestPasswdAllCLI:
         assert result.exit_code != 0
         assert "--confirm-plaintext" in result.output
         assert not out.exists(), "output file must not be created when gate fails"
-        conn.modify_s.assert_not_called()
+        conn.modify.assert_not_called()
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_confirm_plaintext_without_output_is_rejected(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner
     ) -> None:
         conn = MagicMock()
-        conn.search_s.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
+        conn.search.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
         mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
         mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -253,16 +253,16 @@ class TestPasswdAllCLI:
         result = runner.invoke(main, ["passwd-all", "--yes", "--confirm-plaintext"])
         assert result.exit_code != 0
         assert "--confirm-plaintext requires --output" in result.output
-        conn.modify_s.assert_not_called()
+        conn.modify.assert_not_called()
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_world_readable_parent_dir_exits_nonzero(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
     ) -> None:
         """A world-readable parent dir must be refused before any LDAP write."""
         conn = MagicMock()
-        conn.search_s.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
+        conn.search.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
         mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
         mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -289,9 +289,9 @@ class TestPasswdAllCLI:
         assert "world-readable" in result.output
         assert str(wide) in result.output
         assert not out.exists()
-        conn.modify_s.assert_not_called()
+        conn.modify.assert_not_called()
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_length_flag_threads_through_to_bulk_reset(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
@@ -300,7 +300,7 @@ class TestPasswdAllCLI:
         import csv
 
         conn = MagicMock()
-        conn.search_s.return_value = [
+        conn.search.return_value = [
             make_ldap_entry("alice", "Alice", "A", 10001),
             make_ldap_entry("bob", "Bob", "B", 10002),
         ]

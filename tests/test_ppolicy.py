@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import ldap
 import pytest
 
+from ldap_manager.backends import Backend
 from ldap_manager.config import Config
 from ldap_manager.ppolicy import PasswordStatus, PolicyConfig, PPasswordManager, _parse_generalized_time
 
@@ -17,8 +18,10 @@ def cfg() -> Config:
 
 
 @pytest.fixture
-def mock_conn() -> MagicMock:
-    return MagicMock()
+def mock_backend() -> MagicMock:
+    mock = MagicMock(spec=Backend)
+    mock.supports = frozenset()
+    return mock
 
 
 @pytest.fixture
@@ -66,23 +69,23 @@ class TestParseGeneralizedTime:
 
 
 class TestGetPolicy:
-    def test_get_policy_by_dn(self, mgr: PPasswordManager, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = _policy_entry()
-        policy = mgr.get_policy(mock_conn, "cn=default,ou=Policies,dc=example,dc=com")
+    def test_get_policy_by_dn(self, mgr: PPasswordManager, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = _policy_entry()
+        policy = mgr.get_policy(mock_backend, "cn=default,ou=Policies,dc=example,dc=com")
         assert policy is not None
         assert policy.max_age == 15552000
         assert policy.min_length == 8
         assert policy.lockout is True
         assert policy.grace_limit == 3
 
-    def test_get_default_policy(self, mgr: PPasswordManager, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = _policy_entry()
-        policy = mgr.get_policy(mock_conn)
+    def test_get_default_policy(self, mgr: PPasswordManager, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = _policy_entry()
+        policy = mgr.get_policy(mock_backend)
         assert policy is not None
 
-    def test_get_policy_not_found(self, mgr: PPasswordManager, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.side_effect = ldap.NO_SUCH_OBJECT
-        policy = mgr.get_policy(mock_conn, "cn=ghost,dc=example,dc=com")
+    def test_get_policy_not_found(self, mgr: PPasswordManager, mock_backend: MagicMock) -> None:
+        mock_backend.search.side_effect = ldap.NO_SUCH_OBJECT
+        policy = mgr.get_policy(mock_backend, "cn=ghost,dc=example,dc=com")
         assert policy is None
 
     def test_policy_to_dict(self) -> None:
@@ -105,8 +108,8 @@ class TestGetPolicy:
 
 
 class TestGetUserStatus:
-    def test_user_clean(self, mgr: PPasswordManager, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [
+    def test_user_clean(self, mgr: PPasswordManager, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [
             (
                 "uid=jdoe,ou=People,dc=example,dc=com",
                 {
@@ -115,14 +118,14 @@ class TestGetUserStatus:
                 },
             ),
         ]
-        status = mgr.get_user_status(mock_conn, "jdoe")
+        status = mgr.get_user_status(mock_backend, "jdoe")
         assert status is not None
         assert status.uid == "jdoe"
         assert status.locked is False
         assert status.failure_count == 0
 
-    def test_user_locked(self, mgr: PPasswordManager, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [
+    def test_user_locked(self, mgr: PPasswordManager, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [
             (
                 "uid=jdoe,ou=People,dc=example,dc=com",
                 {
@@ -132,14 +135,14 @@ class TestGetUserStatus:
                 },
             ),
         ]
-        status = mgr.get_user_status(mock_conn, "jdoe")
+        status = mgr.get_user_status(mock_backend, "jdoe")
         assert status is not None
         assert status.locked is True
         assert status.failure_count == 2
 
-    def test_user_not_found(self, mgr: PPasswordManager, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = []
-        status = mgr.get_user_status(mock_conn, "nobody")
+    def test_user_not_found(self, mgr: PPasswordManager, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = []
+        status = mgr.get_user_status(mock_backend, "nobody")
         assert status is None
 
     def test_password_status_to_dict(self) -> None:
@@ -161,8 +164,8 @@ class TestGetUserStatus:
 
 
 class TestCheckAllUsers:
-    def test_check_all(self, mgr: PPasswordManager, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.side_effect = [
+    def test_check_all(self, mgr: PPasswordManager, mock_backend: MagicMock) -> None:
+        mock_backend.search.side_effect = [
             [  # check_all_users search
                 ("uid=alice,ou=People,dc=example,dc=com", {"uid": [b"alice"]}),
                 ("uid=bob,ou=People,dc=example,dc=com", {"uid": [b"bob"]}),
@@ -172,10 +175,10 @@ class TestCheckAllUsers:
             # get_user_status for bob
             [("uid=bob,ou=People,dc=example,dc=com", {"uid": [b"bob"]})],
         ]
-        statuses = mgr.check_all_users(mock_conn)
+        statuses = mgr.check_all_users(mock_backend)
         assert len(statuses) == 2
 
-    def test_check_all_empty(self, mgr: PPasswordManager, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.side_effect = ldap.NO_SUCH_OBJECT
-        statuses = mgr.check_all_users(mock_conn)
+    def test_check_all_empty(self, mgr: PPasswordManager, mock_backend: MagicMock) -> None:
+        mock_backend.search.side_effect = ldap.NO_SUCH_OBJECT
+        statuses = mgr.check_all_users(mock_backend)
         assert statuses == []

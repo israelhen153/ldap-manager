@@ -66,86 +66,86 @@ class TestGroupEntry:
 
 
 class TestGroupManagerRead:
-    def test_get_group(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [_make_posix_group()]
+    def test_get_group(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [_make_posix_group()]
         mgr = GroupManager(cfg)
-        g = mgr.get_group(mock_conn, "developers")
+        g = mgr.get_group(mock_backend, "developers")
         assert g is not None
         assert g.cn == "developers"
 
-    def test_get_group_not_found(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = []
+    def test_get_group_not_found(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = []
         mgr = GroupManager(cfg)
-        assert mgr.get_group(mock_conn, "nope") is None
+        assert mgr.get_group(mock_backend, "nope") is None
 
-    def test_list_groups(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [
+    def test_list_groups(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [
             _make_posix_group("alpha", 20000),
             _make_posix_group("beta", 20001),
         ]
         mgr = GroupManager(cfg)
-        groups = mgr.list_groups(mock_conn)
+        groups = mgr.list_groups(mock_backend)
         assert len(groups) == 2
         assert groups[0].cn == "alpha"
 
 
 class TestGroupManagerWrite:
-    def test_create_posix(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = []
+    def test_create_posix(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = []
         mgr = GroupManager(cfg)
-        dn = mgr.create_group(mock_conn, "newgroup", 25000)
+        dn = mgr.create_group(mock_backend, "newgroup", 25000)
         assert "newgroup" in dn
-        mock_conn.add_s.assert_called_once()
+        mock_backend.add.assert_called_once()
 
-    def test_create_duplicate_raises(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [_make_posix_group()]
+    def test_create_duplicate_raises(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [_make_posix_group()]
         mgr = GroupManager(cfg)
         with pytest.raises(ValueError, match="already exists"):
-            mgr.create_group(mock_conn, "developers", 20000)
+            mgr.create_group(mock_backend, "developers", 20000)
 
-    def test_delete_group(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [_make_posix_group()]
+    def test_delete_group(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [_make_posix_group()]
         mgr = GroupManager(cfg)
-        mgr.delete_group(mock_conn, "developers")
-        mock_conn.delete_s.assert_called_once()
+        mgr.delete_group(mock_backend, "developers")
+        mock_backend.delete.assert_called_once()
 
-    def test_delete_not_found(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = []
+    def test_delete_not_found(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = []
         mgr = GroupManager(cfg)
         with pytest.raises(ValueError, match="not found"):
-            mgr.delete_group(mock_conn, "nope")
+            mgr.delete_group(mock_backend, "nope")
 
 
 class TestGroupMembership:
-    def test_add_member_posix(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [_make_posix_group(members=[])]
+    def test_add_member_posix(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [_make_posix_group(members=[])]
         mgr = GroupManager(cfg)
-        mgr.add_member(mock_conn, "developers", "jdoe")
-        mock_conn.modify_s.assert_called_once()
+        mgr.add_member(mock_backend, "developers", "jdoe")
+        mock_backend.modify.assert_called_once()
 
-    def test_add_member_already_exists(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [_make_posix_group(members=["jdoe"])]
+    def test_add_member_already_exists(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [_make_posix_group(members=["jdoe"])]
         mgr = GroupManager(cfg)
-        mgr.add_member(mock_conn, "developers", "jdoe")
-        mock_conn.modify_s.assert_not_called()
+        mgr.add_member(mock_backend, "developers", "jdoe")
+        mock_backend.modify.assert_not_called()
 
-    def test_remove_member_posix(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [_make_posix_group(members=["jdoe"])]
+    def test_remove_member_posix(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [_make_posix_group(members=["jdoe"])]
         mgr = GroupManager(cfg)
-        mgr.remove_member(mock_conn, "developers", "jdoe")
-        mock_conn.modify_s.assert_called_once()
+        mgr.remove_member(mock_backend, "developers", "jdoe")
+        mock_backend.modify.assert_called_once()
 
-    def test_remove_nonmember_raises(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [_make_posix_group(members=["alice"])]
+    def test_remove_nonmember_raises(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [_make_posix_group(members=["alice"])]
         mgr = GroupManager(cfg)
         with pytest.raises(ValueError, match="not a member"):
-            mgr.remove_member(mock_conn, "developers", "jdoe")
+            mgr.remove_member(mock_backend, "developers", "jdoe")
 
-    def test_get_user_groups(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [
+    def test_get_user_groups(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [
             _make_posix_group("devs", 20000, ["jdoe"]),
             _make_posix_group("ops", 20001, ["jdoe"]),
         ]
         mgr = GroupManager(cfg)
-        groups = mgr.get_user_groups(mock_conn, "jdoe")
+        groups = mgr.get_user_groups(mock_backend, "jdoe")
         assert len(groups) == 2

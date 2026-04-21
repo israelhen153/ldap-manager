@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from ldap_manager.backends import Backend
 from ldap_manager.config import (
     BackupConfig,
     Config,
@@ -50,8 +51,24 @@ def cfg_autogen(cfg: Config) -> Config:
 
 @pytest.fixture
 def mock_conn() -> MagicMock:
-    """Mock LDAPObject."""
+    """Mock LDAPObject (legacy, retained for tests not yet migrated)."""
     return MagicMock()
+
+
+@pytest.fixture
+def mock_backend() -> MagicMock:
+    """Mock Backend — specced so typos on method names raise AttributeError.
+
+    The spec tripwire matters: if a module migration misses a call site
+    (e.g. ``.search_s`` that should have been renamed to ``.search``),
+    the test touching it breaks loudly instead of silently registering a
+    call on a magic attribute. Capability markers aren't set by
+    ``MagicMock(spec=Backend)`` because ``supports`` is a class attribute;
+    populate it explicitly so consumers that gate on it still work.
+    """
+    mock = MagicMock(spec=Backend)
+    mock.supports = frozenset()
+    return mock
 
 
 def make_ldap_entry(
