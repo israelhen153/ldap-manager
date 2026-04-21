@@ -12,12 +12,30 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ldap_manager.audit import (
+    AuditLogger,
     FileSink,
     HTTPSink,
     Sink,
     StdoutSink,
     SyslogSink,
 )
+
+
+class _RecordingSink(Sink):
+    """Test helper: captures events or raises on demand."""
+
+    def __init__(self, *, raises: Exception | None = None) -> None:
+        self.events: list[dict[str, object]] = []
+        self.raises = raises
+        self.closed = False
+
+    def emit(self, event: dict[str, object]) -> None:
+        if self.raises is not None:
+            raise self.raises
+        self.events.append(event)
+
+    def close(self) -> None:
+        self.closed = True
 
 
 # ── Sample event ───────────────────────────────────────────────────
@@ -179,3 +197,51 @@ class TestHTTPSink:
             pytest.raises(OSError, match="connection refused"),
         ):
             HTTPSink("https://example.com/audit").emit(_sample())
+
+
+# ── AuditLogger multi-sink fan-out ────────────────────────────────
+class TestAuditLoggerFanout:
+    def test_log_fans_out_to_every_sink(self, tmp_path: Path) -> None:
+        a = _RecordingSink()
+        b = _RecordingSink()
+        lgr = AuditLogger(tmp_path / "ignored.jsonl", sinks=[a, b])
+        lgr.log("user.create", "uid=jdoe")
+        assert len(a.events) == 1
+        assert len(b.events) == 1
+        assert a.events[0]["action"] == "user.create"
+        assert b.events[0]["action"] == "user.create"
+
+    def test_failing_sink_does_not_block_later_sinks(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+        """CRITICAL INVARIANT: an exploding sink cannot abort the caller.
+
+        If the first sink raises, the second must still receive the
+        event, and log() must not propagate the exception.
+        """
+        bad = _RecordingSink(raises=RuntimeError("boom"))
+        good = _RecordingSink()
+        lgr = AuditLogger(tmp_path / "ignored.jsonl", sinks=[bad, good])
+
+        # Must not raise.
+        lgr.log("user.create", "uid=jdoe")
+
+        # Downstream sink still got the event.
+        assert len(good.events) == 1
+        assert good.events[0]["target"] == "uid=jdoe"
+        # A warning was surfaced on stderr so operators can see the drop.
+        err = capsys.readouterr().err
+        assert "boom" in err or "RuntimeError" in err
+
+    def test_all_sinks_failing_does_not_raise(self, tmp_path: Path) -> None:
+        bad1 = _RecordingSink(raises=RuntimeError("one"))
+        bad2 = _RecordingSink(raises=OSError("two"))
+        lgr = AuditLogger(tmp_path / "ignored.jsonl", sinks=[bad1, bad2])
+        # Must not raise even when every sink fails.
+        lgr.log("user.delete", "uid=alice")
+
+    def test_close_closes_every_sink(self, tmp_path: Path) -> None:
+        a = _RecordingSink()
+        b = _RecordingSink()
+        lgr = AuditLogger(tmp_path / "ignored.jsonl", sinks=[a, b])
+        lgr.close()
+        assert a.closed
+        assert b.closed

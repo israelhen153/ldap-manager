@@ -195,22 +195,40 @@ class HTTPSink(Sink):
 
 
 class AuditLogger:
-    """Append-only JSON-lines audit logger.
+    """Append-only JSON-lines audit logger with pluggable sinks.
 
-    Backward-compatible constructor: with no arguments (or with a
-    ``log_path``) it behaves exactly as the old single-file logger.
-    For richer fan-out, pass ``sinks=[...]``.
+    Backward-compatible constructor: with no arguments (or with just a
+    ``log_path``) it writes to a single :class:`FileSink`, preserving
+    the pre-sinks behaviour. Pass ``sinks=[...]`` for fan-out.
+
+    CRITICAL INVARIANT: if a sink's ``emit()`` raises, the error is
+    logged to stderr and the remaining sinks still run. An audit-
+    pipeline failure must never block the caller.
     """
 
     def __init__(
         self,
         log_path: str | Path | None = None,
+        *,
+        sinks: list[Sink] | None = None,
     ) -> None:
-        if log_path is None:
-            log_path = os.environ.get("LDAP_MANAGER_AUDIT_LOG", DEFAULT_AUDIT_LOG)
-        self._file_sink = FileSink(log_path)
-        self._path = self._file_sink.path
-        self._enabled = self._file_sink.enabled
+        if sinks is None:
+            if log_path is None:
+                log_path = os.environ.get("LDAP_MANAGER_AUDIT_LOG", DEFAULT_AUDIT_LOG)
+            file_sink = FileSink(log_path)
+            self._sinks: list[Sink] = [file_sink]
+            self._path = file_sink.path
+            self._enabled = file_sink.enabled
+        else:
+            self._sinks = list(sinks)
+            # Preserve .path / .enabled for legacy callers (cli.py audit
+            # status/log commands). Fall back to the default path so
+            # .query() on that file still works.
+            default_path = log_path or os.environ.get("LDAP_MANAGER_AUDIT_LOG", DEFAULT_AUDIT_LOG)
+            file_sinks = [s for s in self._sinks if isinstance(s, FileSink)]
+            self._path = file_sinks[0].path if file_sinks else Path(default_path)
+            # Logger is enabled if at least one sink exists.
+            self._enabled = bool(self._sinks)
 
     @property
     def enabled(self) -> bool:
@@ -219,6 +237,10 @@ class AuditLogger:
     @property
     def path(self) -> Path:
         return self._path
+
+    @property
+    def sinks(self) -> list[Sink]:
+        return list(self._sinks)
 
     def log(
         self,
@@ -230,7 +252,11 @@ class AuditLogger:
         success: bool = True,
         error: str = "",
     ) -> None:
-        """Write an audit log entry.
+        """Write an audit log entry to every configured sink.
+
+        Per-sink failures are caught: a broken HTTP endpoint must not
+        stop us from writing to the file. Errors are surfaced to stderr
+        so operators can see what's dropping.
 
         Args:
             action: Operation performed (e.g. "user.create", "group.add_member")
@@ -243,7 +269,7 @@ class AuditLogger:
         if not self._enabled:
             return
 
-        entry = {
+        entry: dict[str, Any] = {
             "timestamp": datetime.now(UTC).isoformat(),
             "action": action,
             "target": target,
@@ -257,10 +283,23 @@ class AuditLogger:
         if error:
             entry["error"] = error
 
-        try:
-            self._file_sink.emit(entry)
-        except (OSError, PermissionError) as exc:
-            log.warning("Failed to write audit log: %s", exc)
+        for sink in self._sinks:
+            try:
+                sink.emit(entry)
+            # Must catch *everything*: the whole point of the invariant is
+            # that a buggy sink cannot stop the caller.
+            except Exception as exc:  # pragma: no branch
+                # Write directly to stderr — logging may itself be routed
+                # through an audit handler that's also in trouble.
+                sys.stderr.write(f"[ldap-manager] audit sink {type(sink).__name__} failed: {type(exc).__name__}: {exc}\n")
+
+    def close(self) -> None:
+        """Close every configured sink, swallowing errors."""
+        for sink in self._sinks:
+            try:
+                sink.close()
+            except Exception as exc:  # pragma: no branch
+                sys.stderr.write(f"[ldap-manager] audit sink {type(sink).__name__} close failed: {type(exc).__name__}: {exc}\n")
 
     def query(
         self,
