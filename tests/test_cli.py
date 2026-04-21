@@ -133,7 +133,7 @@ class TestMainHelp:
 
 
 class TestUserListCLI:
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_list_empty(self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner) -> None:
         conn = MagicMock()
@@ -148,7 +148,7 @@ class TestUserListCLI:
         result = runner.invoke(main, ["user", "list"])
         assert "No users found" in result.output
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_list_json(self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner) -> None:
         conn = MagicMock()
@@ -166,7 +166,7 @@ class TestUserListCLI:
 
 
 class TestUserGetCLI:
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_get_not_found(self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner) -> None:
         conn = MagicMock()
@@ -186,7 +186,7 @@ class TestUserGetCLI:
 class TestPasswdAllCLI:
     """Coverage for the hardening behaviours on `passwd-all`."""
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_summary_only_no_file_no_password_in_stdout(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
@@ -215,7 +215,7 @@ class TestPasswdAllCLI:
                 for v in vals:
                     assert v.decode("utf-8", errors="ignore") not in result.output
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_output_without_confirm_plaintext_is_rejected(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
@@ -236,7 +236,7 @@ class TestPasswdAllCLI:
         assert not out.exists(), "output file must not be created when gate fails"
         conn.modify.assert_not_called()
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_confirm_plaintext_without_output_is_rejected(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner
@@ -255,7 +255,7 @@ class TestPasswdAllCLI:
         assert "--confirm-plaintext requires --output" in result.output
         conn.modify.assert_not_called()
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_world_readable_parent_dir_exits_nonzero(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
@@ -291,7 +291,7 @@ class TestPasswdAllCLI:
         assert not out.exists()
         conn.modify.assert_not_called()
 
-    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.OpenLDAPBackend")
     @patch("ldap_manager.cli.load_config")
     def test_length_flag_threads_through_to_bulk_reset(
         self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path

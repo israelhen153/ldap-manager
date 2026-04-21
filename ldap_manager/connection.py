@@ -1,14 +1,9 @@
-"""Transitional shim: ``LDAPConnection`` is now an alias for
-:class:`~ldap_manager.backends.openldap.OpenLDAPBackend`.
+"""Deprecated compatibility shim: re-exports ``OpenLDAPBackend`` as ``LDAPConnection``.
 
-The Backend Protocol work moved the connection + operation surface into
-``ldap_manager/backends/``. CLI code and tests still import
-``LDAPConnection`` from this module — that will keep working because the
-alias preserves the class name. The final cleanup commit in Stage A
-will rename the import site in ``cli.py`` directly; this shim stays
-around until every caller has moved.
-
-Do not add new code here. New backends live under ``backends/``.
+Internal call sites all target ``OpenLDAPBackend`` directly now. This
+module stays in place for external callers who imported
+``from ldap_manager.connection import LDAPConnection``; it may be
+removed in a future release. No new code should reference it.
 """
 
 from __future__ import annotations
