@@ -176,3 +176,76 @@ class TestUserGetCLI:
         result = runner.invoke(main, ["user", "get", "nobody"])
         assert result.exit_code == 1
         assert "not found" in result.output
+
+
+class TestPasswdAllCLI:
+    """Coverage for the hardening behaviours on `passwd-all`."""
+
+    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.load_config")
+    def test_summary_only_no_file_no_password_in_stdout(
+        self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
+    ) -> None:
+        conn = MagicMock()
+        conn.search_s.return_value = [
+            make_ldap_entry("alice", "Alice", "A", 10001),
+            make_ldap_entry("bob", "Bob", "B", 10002),
+        ]
+        mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
+        mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
+
+        from ldap_manager.config import Config
+
+        mock_cfg.return_value = Config()
+
+        result = runner.invoke(main, ["passwd-all", "--yes"])
+        assert result.exit_code == 0, result.output
+        assert "2 users rotated" in result.output
+        assert "zero passwords revealed" in result.output
+        # Every modify_s call took a hashed password; sanity-check none of those
+        # raw plaintexts leaked to stdout.
+        for call in conn.modify_s.call_args_list:
+            mods = call.args[1]
+            for _, _, vals in mods:
+                for v in vals:
+                    assert v.decode("utf-8", errors="ignore") not in result.output
+
+    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.load_config")
+    def test_output_without_confirm_plaintext_is_rejected(
+        self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
+    ) -> None:
+        conn = MagicMock()
+        conn.search_s.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
+        mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
+        mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
+
+        from ldap_manager.config import Config
+
+        mock_cfg.return_value = Config()
+
+        out = tmp_path / "pw.csv"
+        result = runner.invoke(main, ["passwd-all", "--yes", "--output", str(out)])
+        assert result.exit_code != 0
+        assert "--confirm-plaintext" in result.output
+        assert not out.exists(), "output file must not be created when gate fails"
+        conn.modify_s.assert_not_called()
+
+    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.load_config")
+    def test_confirm_plaintext_without_output_is_rejected(
+        self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner
+    ) -> None:
+        conn = MagicMock()
+        conn.search_s.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
+        mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
+        mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
+
+        from ldap_manager.config import Config
+
+        mock_cfg.return_value = Config()
+
+        result = runner.invoke(main, ["passwd-all", "--yes", "--confirm-plaintext"])
+        assert result.exit_code != 0
+        assert "--confirm-plaintext requires --output" in result.output
+        conn.modify_s.assert_not_called()

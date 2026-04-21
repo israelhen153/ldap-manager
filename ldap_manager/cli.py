@@ -946,61 +946,92 @@ def backup_list(ctx: click.Context, as_json: bool) -> None:
 
 @main.command("passwd-all")
 @click.option("--include-disabled", is_flag=True, help="Also reset disabled users")
-@click.option("--output", default=None, help="Output CSV path (default from config)")
+@click.option(
+    "--output",
+    default=None,
+    help="Optional CSV path to record new passwords. Without this flag, passwords are rotated and dropped (summary-only).",
+)
+@click.option(
+    "--confirm-plaintext",
+    is_flag=True,
+    help="Required with --output. Explicit acknowledgement that writing plaintext passwords to disk is a liability.",
+)
 @click.option("--length", type=int, default=None, help="Generated password length")
-@click.option("--dry-run", is_flag=True, help="Generate CSV but don't modify LDAP")
+@click.option("--dry-run", is_flag=True, help="Generate passwords but don't modify LDAP")
 @click.option("--yes", is_flag=True, help="Skip confirmation")
 @click.pass_context
 def passwd_all(
     ctx: click.Context,
     include_disabled: bool,
     output: str | None,
+    confirm_plaintext: bool,
     length: int | None,
     dry_run: bool,
     yes: bool,
 ) -> None:
-    """Reset ALL user passwords and output a CSV manifest.
+    """Reset ALL user passwords.
 
-    Generates a unique random password per user, applies it to LDAP,
-    and writes uid,cn,new_password to a CSV file (chmod 600).
+    By default a fresh random password is generated for every user, applied
+    to LDAP, and immediately dropped — the command only reports how many
+    users were rotated. Passwords never hit stdout.
 
     \b
     EXAMPLES
-        # Reset all enabled users, write CSV
+        # Rotate every enabled user, reveal nothing
         ldap-manager passwd-all
 
-        # Dry run — generate CSV without touching LDAP
+        # Same, also write a CSV manifest (requires explicit acknowledgement)
+        ldap-manager passwd-all --output /secure/pw.csv --confirm-plaintext
+
+        # Dry run — generate passwords without touching LDAP
         ldap-manager passwd-all --dry-run
 
         # Include disabled users
         ldap-manager passwd-all --include-disabled
 
-        # Custom output path and password length
-        ldap-manager passwd-all --output /secure/passwords.csv --length 24
+        # Custom password length
+        ldap-manager passwd-all --length 24
 
         # Non-interactive (skip confirmation)
         ldap-manager passwd-all --yes
 
     \b
-    OUTPUT FILE
-        Default: password.bulk_output_file from config (/tmp/ldap_passwords.csv)
-        Format:  uid,cn,new_password
-        Perms:   0600 (owner read/write only)
+    OUTPUT FILE (optional)
+        Pass --output to record new passwords as uid,cn,new_password CSV.
+        Plaintext on disk is a real liability: --confirm-plaintext is a
+        mandatory acknowledgement, the file is chmod 0600 before any data
+        is written, and the parent directory must not be world-readable.
 
     \b
     NOTES
-        Distribute passwords securely and delete the CSV immediately after.
+        Distribute any manifest securely and delete it immediately after.
         Use --dry-run first to verify the user list.
     """
+    if output is None and confirm_plaintext:
+        click.echo(
+            "error: --confirm-plaintext requires --output; there is no plaintext to confirm without a file.",
+            err=True,
+        )
+        ctx.exit(2)
+    if output is not None and not confirm_plaintext:
+        click.echo(
+            f"error: --output writes plaintext passwords to {output}. Re-run with --confirm-plaintext to acknowledge.",
+            err=True,
+        )
+        ctx.exit(2)
+
     if not yes and not dry_run:
-        if not click.confirm("This will reset passwords for ALL users. New passwords will be written to a CSV file. Continue?"):
+        prompt = "This will reset passwords for ALL users. Continue?"
+        if output:
+            prompt = f"This will reset passwords for ALL users and write plaintext to {output}. Continue?"
+        if not click.confirm(prompt):
             click.echo("Aborted.")
             return
 
     cfg = ctx.obj["config"]
 
     with LDAPConnection(cfg.ldap) as conn:
-        csv_path = bulk_password_reset(
+        result = bulk_password_reset(
             conn,
             cfg,
             enabled_only=not include_disabled,
@@ -1009,9 +1040,14 @@ def passwd_all(
         )
 
     prefix = "[DRY RUN] " if dry_run else ""
-    click.echo(f"{prefix}Password manifest written to: {csv_path}")
-    if not dry_run:
-        click.echo("IMPORTANT: Distribute passwords securely and delete the CSV.")
+    if result.output_path is None:
+        click.echo(f"{prefix}{result.rotated} users rotated, zero passwords revealed.")
+    else:
+        click.echo(f"{prefix}Password manifest written to: {result.output_path}")
+        if not dry_run:
+            click.echo("IMPORTANT: Distribute passwords securely and delete the CSV.")
+    if result.errors:
+        click.echo(f"WARNING: {len(result.errors)} users failed. See log for details.", err=True)
 
 
 # ── Group commands ─────────────────────────────────────────────────
