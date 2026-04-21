@@ -107,11 +107,29 @@ class PasswordConfig:
 
 
 @dataclass
+class AuditConfig:
+    """Audit logging configuration.
+
+    ``sinks`` is a list of sink specs. Each entry is a dict with a
+    ``type`` key (``file``, ``syslog``, ``http``, or ``stdout``) plus
+    any sink-specific options (path, facility, url, headers…).
+
+    If left empty (the default), :func:`ldap_manager.audit.build_sinks`
+    falls back to a single ``FileSink`` at the historical default
+    path, preserving backward compatibility for users who never opt
+    in to the new config.
+    """
+
+    sinks: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
 class Config:
     ldap: LDAPConfig = field(default_factory=LDAPConfig)
     users: UsersConfig = field(default_factory=UsersConfig)
     backup: BackupConfig = field(default_factory=BackupConfig)
     password: PasswordConfig = field(default_factory=PasswordConfig)
+    audit: AuditConfig = field(default_factory=AuditConfig)
 
 
 def load_config(config_path: str | Path | None = None) -> Config:
@@ -143,4 +161,5 @@ def load_config(config_path: str | Path | None = None) -> Config:
         users=UsersConfig(**raw.get("users", {})),
         backup=BackupConfig(**raw.get("backup", {})),
         password=PasswordConfig(**raw.get("password", {})),
+        audit=AuditConfig(**raw.get("audit", {})),
     )
