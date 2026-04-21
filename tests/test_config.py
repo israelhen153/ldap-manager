@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ldap_manager.config import Config, UsersConfig, load_config
+from ldap_manager.config import Config, SchemaConfig, UsersConfig, load_config
 
 
 class TestLoadConfig:
@@ -67,3 +67,38 @@ class TestConfigDataclass:
         assert cfg.ldap.uri == "ldap://localhost"
         assert cfg.users.disabled_shell == "/sbin/nologin"
         assert cfg.backup.slapcat_bin == "/usr/sbin/slapcat"
+
+
+class TestSchemaConfigDefaults:
+    """SchemaConfig defaults = OpenLDAP POSIX profile (historical behaviour)."""
+
+    def test_defaults_are_openldap_posix(self) -> None:
+        s = SchemaConfig()
+        assert s.user_id_attr == "uid"
+        assert s.user_object_class == "inetOrgPerson"
+        assert s.disable_mechanism == "login_shell"
+        assert s.group_membership_attr == "memberUid"
+
+    def test_top_level_backend_default_is_openldap(self) -> None:
+        cfg = Config()
+        assert cfg.backend == "openldap"
+        # Round-trip through load_config (no file, no env) stays on default.
+        fresh = load_config(None)
+        assert fresh.backend == "openldap"
+
+    def test_backend_and_schema_round_trip_from_yaml(self, tmp_path: Path) -> None:
+        f = tmp_path / "ad.yaml"
+        f.write_text(
+            "backend: generic\n"
+            "schema:\n"
+            "  user_id_attr: sAMAccountName\n"
+            "  user_object_class: user\n"
+            "  disable_mechanism: uac_bit\n"
+            "  group_membership_attr: member\n"
+        )
+        cfg = load_config(f)
+        assert cfg.backend == "generic"
+        assert cfg.schema.user_id_attr == "sAMAccountName"
+        assert cfg.schema.user_object_class == "user"
+        assert cfg.schema.disable_mechanism == "uac_bit"
+        assert cfg.schema.group_membership_attr == "member"
