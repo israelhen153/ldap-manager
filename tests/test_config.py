@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from ldap_manager.backends.schemas import get_schema_profile
 from ldap_manager.config import Config, SchemaConfig, UsersConfig, load_config
 
 
@@ -102,3 +103,71 @@ class TestSchemaConfigDefaults:
         assert cfg.schema.user_object_class == "user"
         assert cfg.schema.disable_mechanism == "uac_bit"
         assert cfg.schema.group_membership_attr == "member"
+
+
+class TestSchemaProfiles:
+    """One profile per directory flavour — contract test per row."""
+
+    def test_openldap_posix_profile(self) -> None:
+        schema, supports = get_schema_profile("openldap_posix")
+        assert schema.user_id_attr == "uid"
+        assert schema.user_object_class == "inetOrgPerson"
+        assert schema.disable_mechanism == "login_shell"
+        assert schema.group_membership_attr == "memberUid"
+        # openldap_posix publishes the OpenLDAP-specific markers MINUS
+        # ``backup`` and ``server_ops`` — those need local binaries the
+        # generic backend can't exec.
+        assert supports == frozenset(
+            {
+                "ppolicy_overlay",
+                "cn_config_probe",
+                "password_hash_client",
+                "ssh_public_key_schema",
+                "posix_accounts",
+            }
+        )
+        assert "backup" not in supports
+        assert "server_ops" not in supports
+
+    def test_active_directory_profile(self) -> None:
+        schema, supports = get_schema_profile("active_directory")
+        assert schema.user_id_attr == "sAMAccountName"
+        assert schema.user_object_class == "user"
+        assert schema.disable_mechanism == "uac_bit"
+        assert schema.group_membership_attr == "member"
+        # AD lacks every OpenLDAP-specific capability in our set.
+        assert supports == frozenset()
+
+    def test_389ds_profile(self) -> None:
+        schema, supports = get_schema_profile("389ds")
+        assert schema.user_id_attr == "uid"
+        assert schema.user_object_class == "inetOrgPerson"
+        assert schema.disable_mechanism == "login_shell"
+        assert schema.group_membership_attr == "member"  # groupOfNames, not memberUid
+        assert supports == frozenset(
+            {
+                "cn_config_probe",
+                "password_hash_client",
+                "posix_accounts",
+            }
+        )
+        # 389ds has no openldap ppolicy overlay, no openssh-lpk by default.
+        assert "ppolicy_overlay" not in supports
+        assert "ssh_public_key_schema" not in supports
+
+    def test_unknown_profile_raises(self) -> None:
+        with pytest.raises(ValueError, match="Unknown schema profile"):
+            get_schema_profile("freeipa")
+
+    def test_profile_returns_fresh_instance(self) -> None:
+        """Mutating one caller's profile must not leak into another's."""
+        a, _ = get_schema_profile("active_directory")
+        b, _ = get_schema_profile("active_directory")
+        assert a is not b
+        a.user_id_attr = "mutated"
+        assert b.user_id_attr == "sAMAccountName"
+
+    def test_profile_attaches_supports_to_schema(self) -> None:
+        """GenericBackend reads ``schema.supports``; profile must set it."""
+        schema, supports = get_schema_profile("openldap_posix")
+        assert getattr(schema, "supports", None) == supports
