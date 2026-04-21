@@ -221,6 +221,15 @@ class TestDetectHashSupport:
         conn = _FakeConn(ldap.LDAPError("insufficient access"))
         assert detect_hash_support(conn) == "ssha"  # type: ignore[arg-type]
 
+    def test_falls_back_to_ssha_on_unexpected_exception(self) -> None:
+        """Non-LDAP exceptions (e.g. exhausted mock iterators) also fall back.
+
+        We never want a probing hiccup to abort a password write, so the
+        catch is deliberately broad.
+        """
+        conn = _FakeConn(StopIteration())
+        assert detect_hash_support(conn) == "ssha"  # type: ignore[arg-type]
+
     def test_falls_back_to_ssha_on_empty_probe(self) -> None:
         """No olcPasswordHash entries → default to ssha."""
         conn = _FakeConn([])

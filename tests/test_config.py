@@ -54,6 +54,8 @@ class TestConfigDataclass:
         cfg = Config()
         assert cfg.ldap.timeout == 10
         assert cfg.users.object_classes == ["inetOrgPerson", "posixAccount", "shadowAccount"]
+        # Item 6: default is now 'auto', not '{SSHA}'.
+        assert cfg.password.hash_scheme == "auto"
 
     def test_users_config_new_fields(self) -> None:
         u = UsersConfig(mail_domain="corp.com", generate_password_on_create=True)

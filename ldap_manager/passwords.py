@@ -118,6 +118,12 @@ def detect_hash_support(conn: LDAPObject) -> str:
     # We probe the olcConfig subtree for any olcPasswordHash value. The
     # attribute lives on the frontend/database overlays depending on the
     # setup; subtree-search from cn=config catches all of them.
+    #
+    # Catch broadly: LDAP errors are the expected failure (insufficient
+    # access, cn=config absent), but we also don't want unexpected result
+    # shapes (e.g. a mocked connection returning an exhausted iterator)
+    # to abort a legitimate password change. Falling back to SSHA is
+    # always safe.
     found_tags: set[str] = set()
     try:
         results = conn.search_s(
@@ -132,7 +138,7 @@ def detect_hash_support(conn: LDAPObject) -> str:
                     found_tags.add(raw.decode("utf-8").strip().upper())
                 except UnicodeDecodeError:
                     continue
-    except ldap.LDAPError as exc:
+    except Exception as exc:
         log.warning(
             "Could not probe cn=config for olcPasswordHash (%s); falling back to SSHA for hash scheme detection.",
             exc,
