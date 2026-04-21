@@ -60,6 +60,32 @@ def _json_out(data: Any) -> None:
     click.echo(json.dumps(data, indent=2, ensure_ascii=False))
 
 
+def _require_capability(cfg: Any, command: str, capability: str, reason: str) -> None:
+    """Abort with a clean two-line error if the configured backend lacks a capability.
+
+    Constructs the backend instance (no LDAP connection opened) solely
+    to read its ``supports`` frozenset. On miss, prints two lines to
+    stderr and exits with code 1 — no traceback, no stacktrace, just
+    what the operator needs to flip the right switch in config.
+
+    Using ``click.echo`` + ``sys.exit`` rather than
+    ``click.ClickException`` because the latter renders the ``message``
+    as a single line (collapses embedded newlines), and the format the
+    operators grep for is deliberately two lines.
+    """
+    backend = build_backend(cfg)
+    if capability not in backend.supports:
+        click.echo(
+            f"Error: '{command}' requires capability '{capability}' ({reason}).",
+            err=True,
+        )
+        click.echo(
+            f"Current backend: '{cfg.backend}' does not provide this capability.",
+            err=True,
+        )
+        sys.exit(1)
+
+
 # ── Root group ─────────────────────────────────────────────────────
 
 
@@ -830,6 +856,7 @@ def backup_dump(ctx: click.Context, no_compress: bool, tag: str) -> None:
         slapd does NOT need to be stopped for dump (slapcat reads safely).
     """
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "backup dump", "backup", "needs slapcat on the LDAP host")
     mgr = BackupManager(cfg.backup, cfg.ldap.base_dn)
 
     path = mgr.dump(compress=not no_compress, tag=tag)
@@ -869,6 +896,9 @@ def backup_restore(ctx: click.Context, backup_path: str, with_config: bool, yes:
         0    Restore succeeded, slapd restarted
         1    Restore failed (slapd still restarted)
     """
+    cfg = ctx.obj["config"]
+    _require_capability(cfg, "backup restore", "backup", "needs slapadd on the LDAP host")
+
     if not yes:
         msg = "This will REPLACE the current LDAP database. "
         if with_config:
@@ -878,7 +908,6 @@ def backup_restore(ctx: click.Context, backup_path: str, with_config: bool, yes:
             click.echo("Aborted.")
             return
 
-    cfg = ctx.obj["config"]
     mgr = BackupManager(cfg.backup, cfg.ldap.base_dn)
 
     try:
@@ -940,6 +969,7 @@ def backup_list(ctx: click.Context, as_json: bool) -> None:
         found under backup.backup_dir (sorted newest first).
     """
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "backup list", "backup", "reads the backup directory created by slapcat")
     mgr = BackupManager(cfg.backup, cfg.ldap.base_dn)
 
     backups = mgr.list_backups()
@@ -1391,6 +1421,7 @@ def server_status(ctx: click.Context, as_json: bool) -> None:
     from .server import ServerManager
 
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "server status", "server_ops", "needs systemctl/process access on the LDAP host")
     mgr = ServerManager(cfg)
     st = mgr.status()
 
@@ -1440,6 +1471,7 @@ def server_reindex(ctx: click.Context, suffix: str | None, auto_restart: bool) -
     from .server import ServerManager
 
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "server reindex", "server_ops", "needs slapindex and systemctl on the LDAP host")
     mgr = ServerManager(cfg)
     mgr.reindex(suffix=suffix, auto_restart=auto_restart)
     click.echo("Reindex completed.")
@@ -1452,6 +1484,7 @@ def server_start(ctx: click.Context) -> None:
     from .server import ServerManager
 
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "server start", "server_ops", "needs systemctl on the LDAP host")
     ServerManager(cfg).start()
     click.echo("slapd started.")
 
@@ -1463,6 +1496,7 @@ def server_stop(ctx: click.Context) -> None:
     from .server import ServerManager
 
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "server stop", "server_ops", "needs systemctl on the LDAP host")
     ServerManager(cfg).stop()
     click.echo("slapd stopped.")
 
@@ -1474,6 +1508,7 @@ def server_restart(ctx: click.Context) -> None:
     from .server import ServerManager
 
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "server restart", "server_ops", "needs systemctl on the LDAP host")
     ServerManager(cfg).restart()
     click.echo("slapd restarted.")
 
@@ -1500,6 +1535,9 @@ def user_ssh_key_list(ctx: click.Context, uid: str, as_json: bool) -> None:
     from .sshkeys import SSHKeyManager
 
     cfg = ctx.obj["config"]
+    _require_capability(
+        cfg, "user ssh-key-list", "ssh_public_key_schema", "requires the openssh-lpk schema (ldapPublicKey objectClass)"
+    )
     mgr = SSHKeyManager(cfg)
 
     with build_backend(cfg) as backend:
@@ -1550,6 +1588,9 @@ def user_ssh_key_add(ctx: click.Context, uid: str, key_or_file: str) -> None:
         key = key_path.read_text().strip()
 
     cfg = ctx.obj["config"]
+    _require_capability(
+        cfg, "user ssh-key-add", "ssh_public_key_schema", "requires the openssh-lpk schema (ldapPublicKey objectClass)"
+    )
     mgr = SSHKeyManager(cfg)
 
     with build_backend(cfg) as backend:
@@ -1573,6 +1614,9 @@ def user_ssh_key_remove(ctx: click.Context, uid: str, index: int) -> None:
     from .sshkeys import SSHKeyManager
 
     cfg = ctx.obj["config"]
+    _require_capability(
+        cfg, "user ssh-key-remove", "ssh_public_key_schema", "requires the openssh-lpk schema (ldapPublicKey objectClass)"
+    )
     mgr = SSHKeyManager(cfg)
 
     with build_backend(cfg) as backend:
@@ -1875,6 +1919,7 @@ def ppolicy_status(ctx: click.Context, uid: str, as_json: bool) -> None:
     from .ppolicy import PPasswordManager
 
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "ppolicy status", "ppolicy_overlay", "requires the OpenLDAP ppolicy overlay")
     mgr = PPasswordManager(cfg)
 
     with build_backend(cfg) as backend:
@@ -1913,6 +1958,7 @@ def ppolicy_config(ctx: click.Context, as_json: bool) -> None:
     from .ppolicy import PPasswordManager
 
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "ppolicy policy", "ppolicy_overlay", "requires the OpenLDAP ppolicy overlay")
     mgr = PPasswordManager(cfg)
 
     with build_backend(cfg) as backend:
@@ -1955,6 +2001,7 @@ def ppolicy_check_all(ctx: click.Context, expired: bool, locked: bool, as_json: 
     from .ppolicy import PPasswordManager
 
     cfg = ctx.obj["config"]
+    _require_capability(cfg, "ppolicy check-all", "ppolicy_overlay", "requires the OpenLDAP ppolicy overlay")
     mgr = PPasswordManager(cfg)
 
     with build_backend(cfg) as backend:
