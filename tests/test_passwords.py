@@ -7,10 +7,19 @@ import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import ldap
 import pytest
 
 from ldap_manager.config import Config
-from ldap_manager.passwords import BulkResetResult, InsecureOutputDirError, bulk_password_reset
+from ldap_manager.passwords import (
+    _DETECT_CACHE,
+    BulkResetResult,
+    InsecureOutputDirError,
+    bulk_password_reset,
+    detect_hash_support,
+    hash_password,
+    resolve_hash_scheme,
+)
 
 from .conftest import make_ldap_entry
 
@@ -164,3 +173,158 @@ class TestBulkReset:
         with open(output) as f:
             rows = list(csv.reader(f))[1:]
         assert len(rows[0][2]) == cfg.password.generated_length
+
+
+# ── Hash scheme detection ─────────────────────────────────────────
+
+
+def _olc_entry(*tags: str) -> tuple[str, dict[str, list[bytes]]]:
+    """Build a fake cn=config entry with olcPasswordHash values."""
+    return (
+        "olcDatabase={1}frontend,cn=config",
+        {"olcPasswordHash": [t.encode() for t in tags]},
+    )
+
+
+class _FakeConn:
+    """Minimal stand-in for LDAPObject; WeakKeyDictionary needs a real
+    instance (MagicMock objects aren't weakly referenceable) so the
+    detection cache tests use this tiny shim."""
+
+    def __init__(self, result: object) -> None:
+        self._result = result
+        self.calls = 0
+
+    def search_s(self, *args: object, **kwargs: object) -> object:
+        self.calls += 1
+        if isinstance(self._result, Exception):
+            raise self._result
+        return self._result
+
+
+class TestDetectHashSupport:
+    def setup_method(self) -> None:
+        _DETECT_CACHE.clear()
+
+    def test_prefers_argon2_when_advertised(self) -> None:
+        """{ARGON2} in olcPasswordHash → detect argon2id."""
+        conn = _FakeConn([_olc_entry("{ARGON2}", "{SSHA512}", "{SSHA}")])
+        assert detect_hash_support(conn) == "argon2id"  # type: ignore[arg-type]
+
+    def test_prefers_ssha512_when_no_argon2(self) -> None:
+        """Without {ARGON2}, best remaining is {SSHA512}."""
+        conn = _FakeConn([_olc_entry("{SSHA512}", "{SSHA}")])
+        assert detect_hash_support(conn) == "ssha512"  # type: ignore[arg-type]
+
+    def test_falls_back_to_ssha_on_search_failure(self) -> None:
+        """If the probe raises, return 'ssha' — never propagate."""
+        conn = _FakeConn(ldap.LDAPError("insufficient access"))
+        assert detect_hash_support(conn) == "ssha"  # type: ignore[arg-type]
+
+    def test_falls_back_to_ssha_on_empty_probe(self) -> None:
+        """No olcPasswordHash entries → default to ssha."""
+        conn = _FakeConn([])
+        assert detect_hash_support(conn) == "ssha"  # type: ignore[arg-type]
+
+    def test_accepts_argon2id_tag_variant(self) -> None:
+        """OpenLDAP may surface {ARGON2ID}; treat it as argon2id."""
+        conn = _FakeConn([_olc_entry("{ARGON2ID}", "{SSHA}")])
+        assert detect_hash_support(conn) == "argon2id"  # type: ignore[arg-type]
+
+    def test_skips_argon2id_when_library_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Server claims argon2id but argon2-cffi isn't installed: skip it."""
+        import ldap_manager.passwords as mod
+
+        monkeypatch.setattr(mod, "_argon2_available", lambda: False)
+        conn = _FakeConn([_olc_entry("{ARGON2}", "{SSHA512}", "{SSHA}")])
+        assert detect_hash_support(conn) == "ssha512"  # type: ignore[arg-type]
+
+    def test_caches_result_per_connection(self) -> None:
+        """Second call must not re-issue search_s."""
+        conn = _FakeConn([_olc_entry("{SSHA512}", "{SSHA}")])
+        detect_hash_support(conn)  # type: ignore[arg-type]
+        detect_hash_support(conn)  # type: ignore[arg-type]
+        detect_hash_support(conn)  # type: ignore[arg-type]
+        assert conn.calls == 1, "cache miss — probe ran more than once"
+
+
+class TestHashPassword:
+    def test_ssha_prefix(self) -> None:
+        assert hash_password("foo", "ssha").startswith(b"{SSHA}")
+
+    def test_ssha512_prefix(self) -> None:
+        assert hash_password("foo", "ssha512").startswith(b"{SSHA512}")
+
+    def test_argon2id_prefix(self) -> None:
+        assert hash_password("foo", "argon2id").startswith(b"{ARGON2}")
+
+    def test_legacy_bracketed_scheme_accepted(self) -> None:
+        """Old configs carry '{SSHA}'; normalize don't reject."""
+        assert hash_password("foo", "{SSHA}").startswith(b"{SSHA}")
+        assert hash_password("foo", "{SSHA512}").startswith(b"{SSHA512}")
+
+    def test_unknown_scheme_raises(self) -> None:
+        with pytest.raises(ValueError, match="bcrypt"):
+            hash_password("foo", "bcrypt")
+
+    def test_ssha_reproducible_with_fixed_salt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Given a known salt, SSHA output is deterministic."""
+        import ldap_manager.passwords as mod
+
+        fixed = b"\x00" * 16
+        monkeypatch.setattr(mod.os, "urandom", lambda n: fixed[:n])
+        a = hash_password("hunter2", "ssha")
+        b = hash_password("hunter2", "ssha")
+        assert a == b  # salt was forced → output matches
+
+    def test_ssha512_reproducible_with_fixed_salt(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import ldap_manager.passwords as mod
+
+        fixed = b"\x11" * 16
+        monkeypatch.setattr(mod.os, "urandom", lambda n: fixed[:n])
+        a = hash_password("hunter2", "ssha512")
+        b = hash_password("hunter2", "ssha512")
+        assert a == b
+
+    def test_argon2id_body_is_opaque(self) -> None:
+        """Argon2 has its own salt handling; we just check the output
+        has a non-empty body past the tag and round-trips through the
+        argon2 verifier."""
+        from argon2 import PasswordHasher
+        from argon2.low_level import Type
+
+        out = hash_password("hunter2", "argon2id").decode("utf-8")
+        assert out.startswith("{ARGON2}")
+        body = out[len("{ARGON2}") :]
+        # The body is the standard argon2 MCF string.
+        assert body.startswith("$argon2id$")
+        ph = PasswordHasher(type=Type.ID)
+        assert ph.verify(body, "hunter2") is True
+
+
+class TestResolveHashScheme:
+    def setup_method(self) -> None:
+        _DETECT_CACHE.clear()
+
+    def test_auto_delegates_to_detect(self) -> None:
+        """hash_scheme='auto' resolves to whatever the server advertises."""
+        conn = _FakeConn([_olc_entry("{SSHA512}", "{SSHA}")])
+        cfg = Config()
+        cfg.password.hash_scheme = "auto"
+        assert resolve_hash_scheme(cfg, conn) == "ssha512"  # type: ignore[arg-type]
+
+    def test_explicit_overrides_detection(self) -> None:
+        """Concrete scheme in config overrides server advertisement."""
+        # Server says argon2id; operator says ssha; operator wins.
+        conn = _FakeConn([_olc_entry("{ARGON2}", "{SSHA512}", "{SSHA}")])
+        cfg = Config()
+        cfg.password.hash_scheme = "ssha"
+        assert resolve_hash_scheme(cfg, conn) == "ssha"  # type: ignore[arg-type]
+        # Detection never ran, so the cache stays empty.
+        assert conn.calls == 0
+
+    def test_legacy_bracketed_scheme_accepted(self) -> None:
+        conn = _FakeConn([])
+        cfg = Config()
+        cfg.password.hash_scheme = "{SSHA512}"
+        assert resolve_hash_scheme(cfg, conn) == "ssha512"  # type: ignore[arg-type]
