@@ -361,7 +361,7 @@ class UserManager:
         if mail:
             entry["mail"] = [mail.encode()]
         if generated_password:
-            entry["userPassword"] = [_hash_password(generated_password)]
+            entry["userPassword"] = [_hash_password(generated_password, self._resolve_scheme(conn))]
 
         add_list = modlist.addModlist(entry)
         conn.add_s(dn, add_list)
@@ -432,14 +432,31 @@ class UserManager:
 
     # ── PASSWORD ──────────────────────────────────────────────────
     def set_password(self, conn: LDAPObject, uid: str, password: str) -> None:
-        """Set a user's password."""
+        """Set a user's password.
+
+        The hash scheme is resolved from ``cfg.password.hash_scheme``:
+        ``"auto"`` (the default) triggers cn=config detection on first
+        call per connection; any other value is used verbatim.
+        """
         user = self.get_user(conn, uid)
         if user is None:
             raise ValueError(f"User '{uid}' not found")
 
-        hashed = _hash_password(password)
+        hashed = _hash_password(password, self._resolve_scheme(conn))
         conn.modify_s(user.dn, [(ldap.MOD_REPLACE, "userPassword", [hashed])])
         log.info("Password changed for user %s", uid)
+
+    def _resolve_scheme(self, conn: LDAPObject) -> str:
+        """Turn ``cfg.password.hash_scheme`` into a concrete scheme.
+
+        Import is lazy — at module import time passwords.py imports
+        users.py for UserManager; importing passwords.py here too would
+        still work (it's already loaded) but the late import keeps the
+        dependency direction visible.
+        """
+        from .passwords import resolve_hash_scheme
+
+        return resolve_hash_scheme(self._cfg, conn)
 
     # ── INTERNAL ──────────────────────────────────────────────────
     def _next_uid_number(self, conn: LDAPObject) -> int:
@@ -479,18 +496,19 @@ def _escape(value: str) -> str:
     return value
 
 
-def _hash_password(password: str) -> bytes:
-    """Hash a password using SSHA (salted SHA-1).
+def _hash_password(password: str, scheme: str = "ssha") -> bytes:
+    """Hash a password under the given scheme.
 
-    This is the most universally supported scheme across OpenLDAP versions.
-    For ARGON2 or SHA-512, the server needs pw-* overlay modules loaded.
+    Delegates to :func:`ldap_manager.passwords.hash_password` — this
+    thin wrapper exists so users.py keeps its internal helper name and
+    callers inside this module don't have to reach across modules.
+
+    ``scheme`` defaults to ``"ssha"`` purely to keep this helper safe to
+    call in isolation (e.g. from tests). Production callers pass the
+    resolved scheme from :func:`passwords.resolve_hash_scheme`.
     """
-    import hashlib
-    import os
+    # Local import keeps the module graph acyclic: passwords imports users
+    # at top level for UserManager access.
+    from .passwords import hash_password
 
-    salt = os.urandom(16)
-    digest = hashlib.sha1(password.encode("utf-8") + salt).digest()
-    import base64
-
-    encoded = base64.b64encode(digest + salt).decode("ascii")
-    return f"{{SSHA}}{encoded}".encode()
+    return hash_password(password, scheme)

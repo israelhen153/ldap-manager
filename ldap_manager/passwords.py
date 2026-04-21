@@ -1,18 +1,27 @@
-"""Bulk password operations.
+"""Bulk password operations and scheme-aware password hashing.
 
-Handles global password reset for all users — generates secure random
-passwords, applies them via LDAP modify, and optionally writes a CSV
-manifest to a caller-supplied path.
+This module has two concerns:
 
-Writing plaintext passwords to disk is a liability: the caller must opt
-in explicitly and the CLI gates that on ``--confirm-plaintext``. When no
-``output_file`` is given, passwords are generated, applied, and immediately
-dropped — the function returns only aggregate counts.
+1. **Bulk reset** — generate secure random passwords for every user and
+   apply them via LDAP modify, with an optional CSV manifest. Writing
+   plaintext passwords to disk is a liability: the caller must opt in
+   explicitly and the CLI gates that on ``--confirm-plaintext``. When no
+   ``output_file`` is given, passwords are generated, applied, and
+   immediately dropped — the function returns only aggregate counts.
+
+2. **Password hashing** — :func:`hash_password` implements the three
+   schemes ldap-manager supports on OpenLDAP (``argon2id``, ``ssha512``,
+   ``ssha``) and :func:`resolve_hash_scheme` turns the config value (which
+   may be ``"auto"``) into a concrete scheme. :func:`detect_hash_support`
+   probes ``cn=config`` for ``olcPasswordHash`` so ``auto`` can match the
+   server's own policy without operator intervention.
 """
 
 from __future__ import annotations
 
+import base64
 import csv
+import hashlib
 import logging
 import os
 import secrets
@@ -20,13 +29,235 @@ import stat
 import string
 from dataclasses import dataclass, field
 from pathlib import Path
+from weakref import WeakKeyDictionary
 
+import ldap
 from ldap.ldapobject import LDAPObject
 
 from .config import Config
 from .users import UserManager
 
 log = logging.getLogger(__name__)
+
+# ── Hash schemes ───────────────────────────────────────────────────
+#
+# Supported schemes, ordered from strongest (preferred) to weakest. A
+# server is said to "support" a scheme if its ``olcPasswordHash`` lists
+# the equivalent OpenLDAP tag (``{ARGON2}``, ``{SSHA512}``, ``{SSHA}``).
+_SCHEME_PRIORITY = ("argon2id", "ssha512", "ssha")
+
+# Normalised scheme -> OpenLDAP userPassword prefix tag.
+_SCHEME_TAGS = {
+    "argon2id": "{ARGON2}",
+    "ssha512": "{SSHA512}",
+    "ssha": "{SSHA}",
+}
+
+# Map of the tag-as-seen-in-cn=config back to our canonical scheme name.
+# OpenLDAP may report either ``{ARGON2}`` or ``{ARGON2ID}``; accept both.
+_TAG_TO_SCHEME = {
+    "{ARGON2}": "argon2id",
+    "{ARGON2ID}": "argon2id",
+    "{SSHA512}": "ssha512",
+    "{SSHA}": "ssha",
+}
+
+# Legacy/config-format aliases. Operators used to configure the hash
+# scheme as the bare OpenLDAP prefix (e.g. ``"{SSHA}"``); translate that
+# to the canonical scheme name so existing YAML keeps working.
+_SCHEME_ALIASES = {
+    "{argon2}": "argon2id",
+    "{argon2id}": "argon2id",
+    "argon2": "argon2id",
+    "argon2id": "argon2id",
+    "{ssha512}": "ssha512",
+    "ssha512": "ssha512",
+    "{ssha}": "ssha",
+    "ssha": "ssha",
+}
+
+# Per-connection cache for detect_hash_support. WeakKeyDictionary lets
+# the entry evaporate when the LDAPObject is garbage-collected — we don't
+# want to hold connections alive just to cache a string.
+_DETECT_CACHE: WeakKeyDictionary[LDAPObject, str] = WeakKeyDictionary()
+
+
+def _normalize_scheme(scheme: str) -> str:
+    """Map a user-supplied scheme string to our canonical name.
+
+    Accepts the canonical ``"argon2id"``/``"ssha512"``/``"ssha"`` forms
+    as well as the legacy OpenLDAP-prefix forms (``"{SSHA}"``, etc.)
+    that older configs may carry. Case-insensitive.
+    """
+    key = scheme.strip().lower()
+    if key not in _SCHEME_ALIASES:
+        raise ValueError(f"Unknown password hash scheme {scheme!r}. Expected one of: {', '.join(_SCHEME_PRIORITY)} (or 'auto').")
+    return _SCHEME_ALIASES[key]
+
+
+def detect_hash_support(conn: LDAPObject) -> str:
+    """Return the strongest password hash scheme the server advertises.
+
+    Probes ``cn=config`` for ``olcPasswordHash`` and picks the strongest
+    scheme (per :data:`_SCHEME_PRIORITY`) that both the server supports
+    AND we can actually emit. Result is cached per-connection so repeated
+    ``auto`` resolves in one session don't re-probe.
+
+    Failure modes that return ``"ssha"`` (never raise):
+      * Access denied (bind user can't read cn=config).
+      * cn=config not present (not all setups use dynamic config).
+      * Any unexpected LDAP error.
+
+    When ``argon2id`` would otherwise win but ``argon2-cffi`` isn't
+    importable, it's skipped — we can't hash what we can't produce.
+    """
+    cached = _DETECT_CACHE.get(conn)
+    if cached is not None:
+        return cached
+
+    # We probe the olcConfig subtree for any olcPasswordHash value. The
+    # attribute lives on the frontend/database overlays depending on the
+    # setup; subtree-search from cn=config catches all of them.
+    #
+    # Catch broadly: LDAP errors are the expected failure (insufficient
+    # access, cn=config absent), but we also don't want unexpected result
+    # shapes (e.g. a mocked connection returning an exhausted iterator)
+    # to abort a legitimate password change. Falling back to SSHA is
+    # always safe.
+    found_tags: set[str] = set()
+    try:
+        results = conn.search_s(
+            "cn=config",
+            ldap.SCOPE_SUBTREE,
+            "(olcPasswordHash=*)",
+            ["olcPasswordHash"],
+        )
+        for _dn, attrs in results:
+            for raw in attrs.get("olcPasswordHash", []):
+                try:
+                    found_tags.add(raw.decode("utf-8").strip().upper())
+                except UnicodeDecodeError:
+                    continue
+    except Exception as exc:
+        log.warning(
+            "Could not probe cn=config for olcPasswordHash (%s); falling back to SSHA for hash scheme detection.",
+            exc,
+        )
+        _DETECT_CACHE[conn] = "ssha"
+        return "ssha"
+
+    supported = {_TAG_TO_SCHEME[tag] for tag in found_tags if tag in _TAG_TO_SCHEME}
+
+    # If the server didn't advertise anything we understand, fall back.
+    # SSHA is always safe — every OpenLDAP build ships it.
+    if not supported:
+        log.info("cn=config returned no recognised olcPasswordHash values; defaulting to SSHA.")
+        _DETECT_CACHE[conn] = "ssha"
+        return "ssha"
+
+    # Walk the priority list; pick the strongest we can actually emit.
+    for scheme in _SCHEME_PRIORITY:
+        if scheme not in supported:
+            continue
+        if scheme == "argon2id" and not _argon2_available():
+            log.warning(
+                "Server advertises {ARGON2} but argon2-cffi is not "
+                "installed; skipping argon2id. Install with "
+                "'pip install argon2-cffi' to use it."
+            )
+            continue
+        _DETECT_CACHE[conn] = scheme
+        return scheme
+
+    # Server only advertised things we can't produce (shouldn't really
+    # happen — SSHA should always be in the supported set).
+    _DETECT_CACHE[conn] = "ssha"
+    return "ssha"
+
+
+def resolve_hash_scheme(cfg: Config, conn: LDAPObject) -> str:
+    """Resolve ``cfg.password.hash_scheme`` to a concrete scheme name.
+
+    Precedence:
+      * ``"auto"`` → :func:`detect_hash_support`.
+      * Anything else → :func:`_normalize_scheme` (raises on unknown).
+
+    An explicit scheme ALWAYS wins over ``auto`` detection. That's the
+    escape hatch for operators who know better than our probe.
+    """
+    raw = (cfg.password.hash_scheme or "auto").strip()
+    if raw.lower() == "auto":
+        return detect_hash_support(conn)
+    return _normalize_scheme(raw)
+
+
+def _argon2_available() -> bool:
+    """Return True iff argon2-cffi is importable in this process."""
+    try:
+        import argon2  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _hash_ssha(password: str) -> bytes:
+    """Salted SHA-1 with a 16-byte salt, base64(digest|salt) body."""
+    salt = os.urandom(16)
+    digest = hashlib.sha1(password.encode("utf-8") + salt).digest()
+    body = base64.b64encode(digest + salt).decode("ascii")
+    return f"{_SCHEME_TAGS['ssha']}{body}".encode()
+
+
+def _hash_ssha512(password: str) -> bytes:
+    """Salted SHA-512 with a 16-byte salt, base64(digest|salt) body."""
+    salt = os.urandom(16)
+    digest = hashlib.sha512(password.encode("utf-8") + salt).digest()
+    body = base64.b64encode(digest + salt).decode("ascii")
+    return f"{_SCHEME_TAGS['ssha512']}{body}".encode()
+
+
+def _hash_argon2id(password: str) -> bytes:
+    """Argon2id via argon2-cffi, prefixed with OpenLDAP's ``{ARGON2}``.
+
+    Parameters (time_cost=3, memory_cost=64 MiB, parallelism=4, hash_len=32,
+    salt_len=16) track OWASP 2024 recommendations for interactive auth.
+    """
+    try:
+        from argon2 import PasswordHasher
+        from argon2.low_level import Type
+    except ImportError as exc:  # pragma: no cover - exercised via soft-path test
+        raise RuntimeError("argon2id requested but argon2-cffi is not installed; pip install argon2-cffi") from exc
+
+    hasher = PasswordHasher(
+        time_cost=3,
+        memory_cost=65536,
+        parallelism=4,
+        hash_len=32,
+        salt_len=16,
+        type=Type.ID,
+    )
+    encoded = hasher.hash(password)
+    return f"{_SCHEME_TAGS['argon2id']}{encoded}".encode()
+
+
+def hash_password(password: str, scheme: str) -> bytes:
+    """Hash ``password`` under the given scheme, returning the bytes to
+    drop into the ``userPassword`` attribute (prefix + body).
+
+    ``scheme`` is the normalised name (``"argon2id"``, ``"ssha512"``,
+    ``"ssha"``) or one of the accepted aliases — see
+    :func:`_normalize_scheme`.
+    """
+    normalized = _normalize_scheme(scheme)
+    if normalized == "argon2id":
+        return _hash_argon2id(password)
+    if normalized == "ssha512":
+        return _hash_ssha512(password)
+    if normalized == "ssha":
+        return _hash_ssha(password)
+    # _normalize_scheme would have raised already, but keep the branch
+    # explicit for the type-checker.
+    raise ValueError(f"Unknown password hash scheme: {scheme!r}")
 
 
 # Alphabet for generated passwords — ASCII letters + digits. Deliberately

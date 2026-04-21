@@ -100,7 +100,25 @@ class BackupConfig:
 
 @dataclass
 class PasswordConfig:
-    hash_scheme: str = "{SSHA}"
+    """Password generation and hashing configuration.
+
+    ``hash_scheme`` selects how ``userPassword`` values are hashed before
+    they hit LDAP. Accepted values (case-insensitive):
+
+    * ``"auto"`` (default) — probe ``cn=config`` for ``olcPasswordHash``
+      and pick the strongest scheme the server AND this process can
+      produce. Falls back to ``ssha`` if the probe fails.
+    * ``"argon2id"`` — Argon2id via argon2-cffi, OpenLDAP ``{ARGON2}``.
+      Requires the ``pw-argon2`` overlay loaded server-side.
+    * ``"ssha512"`` — salted SHA-512, OpenLDAP ``{SSHA512}``.
+    * ``"ssha"`` — salted SHA-1, OpenLDAP ``{SSHA}``. Still universally
+      supported but cryptographically weak; avoid for new deployments.
+
+    The legacy bracketed forms (``"{SSHA}"``, ``"{SSHA512}"``) are
+    accepted as aliases so pre-1.1 configs keep working.
+    """
+
+    hash_scheme: str = "auto"
     generated_length: int = 20
     bulk_output_file: str = "/tmp/ldap_passwords.csv"
     default_password: str = "123456"

@@ -217,18 +217,95 @@ class TestUserManagerModify:
 
 class TestPasswordHashing:
     def test_ssha_format(self) -> None:
-        hashed = _hash_password("testpass")
+        hashed = _hash_password("testpass", "ssha")
         assert hashed.startswith(b"{SSHA}")
 
     def test_different_passwords_different_hashes(self) -> None:
-        h1 = _hash_password("pass1")
-        h2 = _hash_password("pass2")
+        h1 = _hash_password("pass1", "ssha")
+        h2 = _hash_password("pass2", "ssha")
         assert h1 != h2
 
     def test_same_password_different_salt(self) -> None:
-        h1 = _hash_password("samepass")
-        h2 = _hash_password("samepass")
+        h1 = _hash_password("samepass", "ssha")
+        h2 = _hash_password("samepass", "ssha")
         assert h1 != h2  # salt differs
+
+    def test_helper_delegates_to_passwords_module(self) -> None:
+        """_hash_password is a thin wrapper; argon2id/ssha512 round-trip through it."""
+        assert _hash_password("x", "argon2id").startswith(b"{ARGON2}")
+        assert _hash_password("x", "ssha512").startswith(b"{SSHA512}")
+
+
+class TestSetPasswordUsesConfiguredScheme:
+    """End-to-end: cfg.password.hash_scheme reaches the modify_s payload."""
+
+    def test_explicit_ssha512_emits_ssha512(self, cfg: Config, mock_conn: MagicMock) -> None:
+        from ldap_manager.passwords import _DETECT_CACHE
+
+        _DETECT_CACHE.clear()
+        cfg.password.hash_scheme = "ssha512"
+        mock_conn.search_s.return_value = [make_ldap_entry()]
+        mgr = UserManager(cfg)
+        mgr.set_password(mock_conn, "jdoe", "newpass123")
+        mod_val = mock_conn.modify_s.call_args[0][1][0][2][0]
+        assert mod_val.startswith(b"{SSHA512}")
+
+    def test_explicit_argon2id_emits_argon2(self, cfg: Config, mock_conn: MagicMock) -> None:
+        from ldap_manager.passwords import _DETECT_CACHE
+
+        _DETECT_CACHE.clear()
+        cfg.password.hash_scheme = "argon2id"
+        mock_conn.search_s.return_value = [make_ldap_entry()]
+        mgr = UserManager(cfg)
+        mgr.set_password(mock_conn, "jdoe", "newpass123")
+        mod_val = mock_conn.modify_s.call_args[0][1][0][2][0]
+        assert mod_val.startswith(b"{ARGON2}")
+
+    def test_auto_with_argon2_server_emits_argon2(self, cfg: Config, mock_conn: MagicMock) -> None:
+        """When hash_scheme='auto' and server advertises {ARGON2}, we emit it."""
+        from ldap_manager.passwords import _DETECT_CACHE
+
+        _DETECT_CACHE.clear()
+        cfg.password.hash_scheme = "auto"
+
+        # First search_s: detect_hash_support lookup → return olcPasswordHash.
+        # Subsequent search_s: get_user lookup → return the user entry.
+        # In set_password the order is actually: get_user → _resolve_scheme.
+        # So queue get_user first, then the cn=config probe.
+        user_entry = make_ldap_entry()
+        olc_entry = (
+            "olcDatabase={1}frontend,cn=config",
+            {"olcPasswordHash": [b"{ARGON2}", b"{SSHA512}", b"{SSHA}"]},
+        )
+        mock_conn.search_s.side_effect = [[user_entry], [olc_entry]]
+
+        mgr = UserManager(cfg)
+        mgr.set_password(mock_conn, "jdoe", "newpass123")
+        mod_val = mock_conn.modify_s.call_args[0][1][0][2][0]
+        assert mod_val.startswith(b"{ARGON2}")
+
+    def test_create_user_uses_configured_scheme(self, cfg: Config, mock_conn: MagicMock) -> None:
+        """create_user's hashed userPassword must use the configured scheme.
+
+        Exercises the default_password branch: explicit_password=None and
+        users.default_password set (the existing conftest default is
+        '123456') → the hashed value lands in the add modlist under the
+        configured scheme.
+        """
+        from ldap_manager.passwords import _DETECT_CACHE
+
+        _DETECT_CACHE.clear()
+        cfg.password.hash_scheme = "ssha512"
+        # get_user (not found) + _next_uid_number scan. Both return [].
+        mock_conn.search_s.side_effect = [[], []]
+        mgr = UserManager(cfg)
+        # explicit_password=None routes through the default_password path,
+        # which IS hashed.
+        mgr.create_user(mock_conn, "newuser", explicit_password=None)
+        add_list = mock_conn.add_s.call_args[0][1]
+        pw_values = [vals for attr, vals in add_list if attr == "userPassword"]
+        assert pw_values, "userPassword missing from add modlist"
+        assert pw_values[0][0].startswith(b"{SSHA512}")
 
 
 class TestUserManagerSearch:

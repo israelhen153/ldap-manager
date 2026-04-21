@@ -59,8 +59,19 @@ backup:
   retention_count: 10
 
 password:
-  # Password hash scheme: {SSHA}, {SHA512}, {ARGON2} (if supported)
-  hash_scheme: "{SSHA}"
+  # Password hash scheme. One of:
+  #   auto      — probe the server's olcPasswordHash (cn=config) and use
+  #               the strongest of {argon2id, ssha512, ssha} it supports.
+  #               Falls back to ssha if the probe fails (e.g. no access
+  #               to cn=config). THIS IS THE DEFAULT.
+  #   argon2id  — Argon2id (OpenLDAP {ARGON2}). Requires the pw-argon2
+  #               overlay loaded server-side AND the argon2-cffi Python
+  #               package (installed automatically as a core dependency).
+  #   ssha512   — Salted SHA-512 (OpenLDAP {SSHA512}).
+  #   ssha      — Salted SHA-1 (OpenLDAP {SSHA}). Universally supported
+  #               but cryptographically weak — avoid for new deployments.
+  # Legacy forms like "{SSHA}" / "{SSHA512}" are accepted as aliases.
+  hash_scheme: "auto"
   # Length for generated passwords
   generated_length: 20
   # Output file for bulk password changes (CSV: uid,password)

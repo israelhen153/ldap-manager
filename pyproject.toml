@@ -12,6 +12,7 @@ dependencies = [
     "click>=8.1",
     "pyyaml>=6.0",
     "passlib>=1.7",
+    "argon2-cffi>=21.3",
 ]
 authors = [
     { name = "Israel Hen", email = "israelhen153@gmail.com" }
