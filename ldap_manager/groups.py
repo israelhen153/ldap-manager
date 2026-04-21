@@ -12,8 +12,8 @@ from typing import Any
 
 import ldap
 import ldap.modlist as modlist
-from ldap.ldapobject import LDAPObject
 
+from .backends import Backend
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -92,11 +92,11 @@ class GroupManager:
         self._lcfg = cfg.ldap
 
     # ── READ ───────────────────────────────────────────────────────
-    def get_group(self, conn: LDAPObject, cn: str) -> GroupEntry | None:
+    def get_group(self, backend: Backend, cn: str) -> GroupEntry | None:
         """Fetch a single group by cn."""
         search_filter = f"(&(|(objectClass=posixGroup)(objectClass=groupOfNames))(cn={cn}))"
         try:
-            results = conn.search_s(self._lcfg.groups_ou, ldap.SCOPE_SUBTREE, search_filter, _GROUP_ATTRS)
+            results = backend.search(self._lcfg.groups_ou, ldap.SCOPE_SUBTREE, search_filter, _GROUP_ATTRS)
         except ldap.NO_SUCH_OBJECT:
             return None
 
@@ -108,11 +108,11 @@ class GroupManager:
             return None
         return GroupEntry.from_ldap(dn, attrs)
 
-    def list_groups(self, conn: LDAPObject) -> list[GroupEntry]:
+    def list_groups(self, backend: Backend) -> list[GroupEntry]:
         """List all groups under the groups OU."""
         search_filter = "(|(objectClass=posixGroup)(objectClass=groupOfNames))"
         try:
-            results = conn.search_s(self._lcfg.groups_ou, ldap.SCOPE_SUBTREE, search_filter, _GROUP_ATTRS)
+            results = backend.search(self._lcfg.groups_ou, ldap.SCOPE_SUBTREE, search_filter, _GROUP_ATTRS)
         except ldap.NO_SUCH_OBJECT:
             return []
 
@@ -127,7 +127,7 @@ class GroupManager:
     # ── CREATE ─────────────────────────────────────────────────────
     def create_group(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         cn: str,
         gid_number: int,
         *,
@@ -142,7 +142,7 @@ class GroupManager:
             description: Optional description
             posix: If True, create posixGroup. If False, create groupOfNames.
         """
-        if self.get_group(conn, cn) is not None:
+        if self.get_group(backend, cn) is not None:
             raise ValueError(f"Group '{cn}' already exists")
 
         dn = f"cn={cn},{self._lcfg.groups_ou}"
@@ -165,23 +165,23 @@ class GroupManager:
             entry["description"] = [description.encode()]
 
         add_list = modlist.addModlist(entry)
-        conn.add_s(dn, add_list)
+        backend.add(dn, add_list)
         log.info("Created group %s (%s)", cn, dn)
         return dn
 
     # ── DELETE ─────────────────────────────────────────────────────
-    def delete_group(self, conn: LDAPObject, cn: str) -> None:
+    def delete_group(self, backend: Backend, cn: str) -> None:
         """Delete a group."""
-        group = self.get_group(conn, cn)
+        group = self.get_group(backend, cn)
         if group is None:
             raise ValueError(f"Group '{cn}' not found")
-        conn.delete_s(group.dn)
+        backend.delete(group.dn)
         log.info("Deleted group %s (%s)", cn, group.dn)
 
     # ── MEMBERSHIP ─────────────────────────────────────────────────
-    def add_member(self, conn: LDAPObject, group_cn: str, uid: str) -> None:
+    def add_member(self, backend: Backend, group_cn: str, uid: str) -> None:
         """Add a user to a group."""
-        group = self.get_group(conn, group_cn)
+        group = self.get_group(backend, group_cn)
         if group is None:
             raise ValueError(f"Group '{group_cn}' not found")
 
@@ -189,40 +189,40 @@ class GroupManager:
             if uid in group.members:
                 log.warning("User %s is already a member of %s", uid, group_cn)
                 return
-            conn.modify_s(group.dn, [(ldap.MOD_ADD, "memberUid", [uid.encode()])])
+            backend.modify(group.dn, [(ldap.MOD_ADD, "memberUid", [uid.encode()])])
         else:
             member_dn = f"uid={uid},{self._lcfg.users_ou}"
             if member_dn in group.members:
                 log.warning("User %s is already a member of %s", uid, group_cn)
                 return
-            conn.modify_s(group.dn, [(ldap.MOD_ADD, "member", [member_dn.encode()])])
+            backend.modify(group.dn, [(ldap.MOD_ADD, "member", [member_dn.encode()])])
 
         log.info("Added %s to group %s", uid, group_cn)
 
-    def remove_member(self, conn: LDAPObject, group_cn: str, uid: str) -> None:
+    def remove_member(self, backend: Backend, group_cn: str, uid: str) -> None:
         """Remove a user from a group."""
-        group = self.get_group(conn, group_cn)
+        group = self.get_group(backend, group_cn)
         if group is None:
             raise ValueError(f"Group '{group_cn}' not found")
 
         if group.is_posix:
             if uid not in group.members:
                 raise ValueError(f"User '{uid}' is not a member of group '{group_cn}'")
-            conn.modify_s(group.dn, [(ldap.MOD_DELETE, "memberUid", [uid.encode()])])
+            backend.modify(group.dn, [(ldap.MOD_DELETE, "memberUid", [uid.encode()])])
         else:
             member_dn = f"uid={uid},{self._lcfg.users_ou}"
             if member_dn not in group.members:
                 raise ValueError(f"User '{uid}' is not a member of group '{group_cn}'")
-            conn.modify_s(group.dn, [(ldap.MOD_DELETE, "member", [member_dn.encode()])])
+            backend.modify(group.dn, [(ldap.MOD_DELETE, "member", [member_dn.encode()])])
 
         log.info("Removed %s from group %s", uid, group_cn)
 
-    def get_user_groups(self, conn: LDAPObject, uid: str) -> list[GroupEntry]:
+    def get_user_groups(self, backend: Backend, uid: str) -> list[GroupEntry]:
         """Find all groups a user belongs to."""
         member_dn = f"uid={uid},{self._lcfg.users_ou}"
         search_filter = f"(|(&(objectClass=posixGroup)(memberUid={uid}))(&(objectClass=groupOfNames)(member={member_dn})))"
         try:
-            results = conn.search_s(self._lcfg.groups_ou, ldap.SCOPE_SUBTREE, search_filter, _GROUP_ATTRS)
+            results = backend.search(self._lcfg.groups_ou, ldap.SCOPE_SUBTREE, search_filter, _GROUP_ATTRS)
         except ldap.NO_SUCH_OBJECT:
             return []
 

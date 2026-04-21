@@ -12,8 +12,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 import ldap
-from ldap.ldapobject import LDAPObject
 
+from .backends import Backend
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class PPasswordManager:
         self._cfg = cfg
         self._lcfg = cfg.ldap
 
-    def get_user_status(self, conn: LDAPObject, uid: str) -> PasswordStatus | None:
+    def get_user_status(self, backend: Backend, uid: str) -> PasswordStatus | None:
         """Get password policy status for a user."""
         search_filter = f"(&(objectClass=posixAccount)(uid={uid}))"
 
@@ -121,7 +121,7 @@ class PPasswordManager:
         attrs = ["uid", "dn"] + _PPOLICY_ATTRS
 
         try:
-            results = conn.search_s(
+            results = backend.search(
                 self._lcfg.users_ou,
                 ldap.SCOPE_SUBTREE,
                 search_filter,
@@ -134,6 +134,7 @@ class PPasswordManager:
             return None
 
         dn, entry_attrs = results[0]
+        assert dn is not None  # narrowed above; keeps mypy happy after tuple unpack
 
         def _s(key: str) -> str | None:
             vals = entry_attrs.get(key, [])
@@ -156,7 +157,7 @@ class PPasswordManager:
         if changed:
             try:
                 # Try user-specific policy first, fall back to default
-                policy = self.get_policy(conn, policy_dn) if policy_dn else self.get_policy(conn)
+                policy = self.get_policy(backend, policy_dn) if policy_dn else self.get_policy(backend)
                 if policy and policy.max_age:
                     changed_dt = _parse_generalized_time(changed)
                     if changed_dt:
@@ -184,7 +185,7 @@ class PPasswordManager:
             policy_dn=policy_dn or (policy.dn if policy else None),
         )
 
-    def get_policy(self, conn: LDAPObject, policy_dn: str | None = None) -> PolicyConfig | None:
+    def get_policy(self, backend: Backend, policy_dn: str | None = None) -> PolicyConfig | None:
         """Read a password policy configuration.
 
         If policy_dn is None, tries to find the default policy.
@@ -192,7 +193,7 @@ class PPasswordManager:
         if policy_dn is None:
             # Look for default policy under base DN
             try:
-                results = conn.search_s(
+                results = backend.search(
                     self._lcfg.base_dn,
                     ldap.SCOPE_SUBTREE,
                     "(objectClass=pwdPolicy)",
@@ -206,7 +207,7 @@ class PPasswordManager:
                 return None
         else:
             try:
-                results = conn.search_s(
+                results = backend.search(
                     policy_dn,
                     ldap.SCOPE_BASE,
                     "(objectClass=*)",
@@ -247,7 +248,7 @@ class PPasswordManager:
 
     def check_all_users(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         *,
         expired_only: bool = False,
         locked_only: bool = False,
@@ -259,7 +260,7 @@ class PPasswordManager:
             locked_only: Only return locked users
         """
         try:
-            results = conn.search_s(
+            results = backend.search(
                 self._lcfg.users_ou,
                 ldap.SCOPE_SUBTREE,
                 "(objectClass=posixAccount)",
@@ -278,7 +279,7 @@ class PPasswordManager:
                 continue
             uid = uid_vals[0].decode("utf-8")
 
-            status = self.get_user_status(conn, uid)
+            status = self.get_user_status(backend, uid)
             if status is None:
                 continue
 

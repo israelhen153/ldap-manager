@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 import ldap
-from ldap.ldapobject import LDAPObject
 
+from .backends import Backend
 from .config import Config
 
 log = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class TreeManager:
     # ── LIST OUs ───────────────────────────────────────────────────
     def list_ous(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         base_dn: str | None = None,
     ) -> list[OUEntry]:
         """List all organizationalUnits under a base DN."""
@@ -53,7 +53,7 @@ class TreeManager:
             base_dn = self._lcfg.base_dn
 
         try:
-            results = conn.search_s(
+            results = backend.search(
                 base_dn,
                 ldap.SCOPE_SUBTREE,
                 "(objectClass=organizationalUnit)",
@@ -76,7 +76,7 @@ class TreeManager:
             # Count direct children
             children = 0
             try:
-                child_results = conn.search_s(dn, ldap.SCOPE_ONELEVEL, "(objectClass=*)", ["dn"])
+                child_results = backend.search(dn, ldap.SCOPE_ONELEVEL, "(objectClass=*)", ["dn"])
                 children = len([r for r in child_results if r[0] is not None])
             except ldap.NO_SUCH_OBJECT:
                 pass
@@ -88,7 +88,7 @@ class TreeManager:
     # ── CREATE OU ──────────────────────────────────────────────────
     def create_ou(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         ou_name: str,
         parent_dn: str | None = None,
         description: str = "",
@@ -101,7 +101,7 @@ class TreeManager:
 
         # Check if already exists
         try:
-            conn.search_s(dn, ldap.SCOPE_BASE, "(objectClass=*)", ["dn"])
+            backend.search(dn, ldap.SCOPE_BASE, "(objectClass=*)", ["dn"])
             raise ValueError(f"OU '{dn}' already exists")
         except ldap.NO_SUCH_OBJECT:
             pass
@@ -113,14 +113,14 @@ class TreeManager:
         if description:
             entry.append(("description", [description.encode()]))
 
-        conn.add_s(dn, entry)
+        backend.add(dn, entry)
         log.info("Created OU: %s", dn)
         return dn
 
     # ── DELETE OU ──────────────────────────────────────────────────
     def delete_ou(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         dn: str,
         *,
         recursive: bool = False,
@@ -137,12 +137,12 @@ class TreeManager:
         """
         # Check it exists
         try:
-            conn.search_s(dn, ldap.SCOPE_BASE, "(objectClass=*)", ["dn"])
+            backend.search(dn, ldap.SCOPE_BASE, "(objectClass=*)", ["dn"])
         except ldap.NO_SUCH_OBJECT:
             raise ValueError(f"OU '{dn}' not found") from None
 
         # Check for children
-        children = conn.search_s(dn, ldap.SCOPE_ONELEVEL, "(objectClass=*)", ["dn"])
+        children = backend.search(dn, ldap.SCOPE_ONELEVEL, "(objectClass=*)", ["dn"])
         children = [c for c in children if c[0] is not None]
 
         if children and not recursive:
@@ -151,17 +151,19 @@ class TreeManager:
         count = 0
         if recursive:
             # Delete deepest entries first (reverse sort by DN length)
-            all_entries = conn.search_s(dn, ldap.SCOPE_SUBTREE, "(objectClass=*)", ["dn"])
+            all_entries = backend.search(dn, ldap.SCOPE_SUBTREE, "(objectClass=*)", ["dn"])
             all_entries = [e for e in all_entries if e[0] is not None]
             # Sort longest DN first (deepest entries)
-            all_entries.sort(key=lambda e: len(e[0]), reverse=True)
+            all_entries.sort(key=lambda e: len(e[0]) if e[0] is not None else 0, reverse=True)
 
             for entry_dn, _ in all_entries:
-                conn.delete_s(entry_dn)
+                if entry_dn is None:
+                    continue
+                backend.delete(entry_dn)
                 count += 1
                 log.debug("Deleted: %s", entry_dn)
         else:
-            conn.delete_s(dn)
+            backend.delete(dn)
             count = 1
 
         log.info("Deleted %d entries under %s", count, dn)
@@ -170,7 +172,7 @@ class TreeManager:
     # ── TREE VIEW ──────────────────────────────────────────────────
     def tree(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         base_dn: str | None = None,
         max_depth: int = 3,
     ) -> list[dict[str, Any]]:
@@ -182,12 +184,12 @@ class TreeManager:
             base_dn = self._lcfg.base_dn
 
         result: list[dict[str, Any]] = []
-        self._walk_tree(conn, base_dn, 0, max_depth, result)
+        self._walk_tree(backend, base_dn, 0, max_depth, result)
         return result
 
     def _walk_tree(
         self,
-        conn: LDAPObject,
+        backend: Backend,
         dn: str,
         depth: int,
         max_depth: int,
@@ -198,7 +200,7 @@ class TreeManager:
             return
 
         try:
-            entries = conn.search_s(dn, ldap.SCOPE_BASE, "(objectClass=*)", ["objectClass"])
+            entries = backend.search(dn, ldap.SCOPE_BASE, "(objectClass=*)", ["objectClass"])
         except ldap.NO_SUCH_OBJECT:
             return
 
@@ -208,10 +210,10 @@ class TreeManager:
 
         # Get direct children
         try:
-            children = conn.search_s(dn, ldap.SCOPE_ONELEVEL, "(objectClass=*)", ["dn"])
+            children = backend.search(dn, ldap.SCOPE_ONELEVEL, "(objectClass=*)", ["dn"])
         except ldap.NO_SUCH_OBJECT:
             return
 
         for child_dn, _ in sorted(children, key=lambda e: e[0] or ""):
             if child_dn is not None:
-                self._walk_tree(conn, child_dn, depth + 1, max_depth, result)
+                self._walk_tree(backend, child_dn, depth + 1, max_depth, result)

@@ -12,15 +12,15 @@ from io import StringIO
 from pathlib import Path
 
 import ldap
-from ldap.ldapobject import LDAPObject
 
+from .backends import Backend
 from .config import Config
 
 log = logging.getLogger(__name__)
 
 
 def export_ldif(
-    conn: LDAPObject,
+    backend: Backend,
     cfg: Config,
     *,
     output: Path | None = None,
@@ -31,7 +31,7 @@ def export_ldif(
     """Export entries as LDIF.
 
     Args:
-        conn: Bound LDAP connection
+        backend: Bound LDAP backend
         cfg: Config object
         output: File path to write (None = return as string)
         enabled_only: Skip disabled users (users scope only)
@@ -58,7 +58,7 @@ def export_ldif(
 
     for base_dn in bases:
         try:
-            results = conn.search_s(
+            results = backend.search(
                 base_dn,
                 ldap.SCOPE_SUBTREE,
                 "(objectClass=*)",
@@ -138,7 +138,7 @@ def _needs_base64(text: str) -> bool:
 
 
 def import_ldif(
-    conn: LDAPObject,
+    backend: Backend,
     ldif_path: Path,
     *,
     dry_run: bool = False,
@@ -147,7 +147,7 @@ def import_ldif(
     """Import entries from an LDIF file.
 
     Args:
-        conn: Bound LDAP connection
+        backend: Bound LDAP backend
         ldif_path: Path to LDIF file
         dry_run: Parse and validate but don't modify LDAP
         stop_on_error: Abort on first error
@@ -169,7 +169,7 @@ def import_ldif(
 
         try:
             add_list = [(attr, vals) for attr, vals in attrs.items()]
-            conn.add_s(dn, add_list)
+            backend.add(dn, add_list)
             counts["added"] += 1
             log.info("Added: %s", dn)
         except ldap.ALREADY_EXISTS:

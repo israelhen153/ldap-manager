@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import ldap
 import pytest
 
+from ldap_manager.backends import Backend
 from ldap_manager.config import Config
 from ldap_manager.ldif_ops import _needs_base64, _parse_ldif, export_ldif, import_ldif
 
@@ -19,8 +20,10 @@ def cfg() -> Config:
 
 
 @pytest.fixture
-def mock_conn() -> MagicMock:
-    return MagicMock()
+def mock_backend() -> MagicMock:
+    mock = MagicMock(spec=Backend)
+    mock.supports = frozenset()
+    return mock
 
 
 class TestNeedsBase64:
@@ -44,8 +47,8 @@ class TestNeedsBase64:
 
 
 class TestExportLdif:
-    def test_export_users(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = [
+    def test_export_users(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = [
             (
                 "uid=jdoe,ou=People,dc=example,dc=com",
                 {
@@ -55,14 +58,14 @@ class TestExportLdif:
                 },
             ),
         ]
-        result = export_ldif(mock_conn, cfg)
+        result = export_ldif(mock_backend, cfg)
         assert "dn: uid=jdoe" in result
         assert "uid: jdoe" in result
         assert "cn: John Doe" in result
 
-    def test_export_binary_value(self, cfg: Config, mock_conn: MagicMock) -> None:
+    def test_export_binary_value(self, cfg: Config, mock_backend: MagicMock) -> None:
         binary_data = bytes(range(256))
-        mock_conn.search_s.return_value = [
+        mock_backend.search.return_value = [
             (
                 "uid=jdoe,ou=People,dc=example,dc=com",
                 {
@@ -70,21 +73,21 @@ class TestExportLdif:
                 },
             ),
         ]
-        result = export_ldif(mock_conn, cfg)
+        result = export_ldif(mock_backend, cfg)
         assert "userPassword::" in result
 
-    def test_export_to_file(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
-        mock_conn.search_s.return_value = [
+    def test_export_to_file(self, cfg: Config, mock_backend: MagicMock, tmp_path: Path) -> None:
+        mock_backend.search.return_value = [
             ("uid=jdoe,ou=People,dc=example,dc=com", {"uid": [b"jdoe"]}),
         ]
         out = tmp_path / "export.ldif"
-        export_ldif(mock_conn, cfg, output=out)
+        export_ldif(mock_backend, cfg, output=out)
         assert out.is_file()
         assert "uid=jdoe" in out.read_text()
 
-    def test_export_empty(self, cfg: Config, mock_conn: MagicMock) -> None:
-        mock_conn.search_s.return_value = []
-        result = export_ldif(mock_conn, cfg)
+    def test_export_empty(self, cfg: Config, mock_backend: MagicMock) -> None:
+        mock_backend.search.return_value = []
+        result = export_ldif(mock_backend, cfg)
         assert "# LDIF export" in result
 
 
@@ -134,27 +137,27 @@ class TestParseLdif:
 
 
 class TestImportLdif:
-    def test_import_dry_run(self, mock_conn: MagicMock, tmp_path: Path) -> None:
+    def test_import_dry_run(self, mock_backend: MagicMock, tmp_path: Path) -> None:
         ldif = tmp_path / "import.ldif"
         ldif.write_text("dn: uid=jdoe,ou=People,dc=example,dc=com\nuid: jdoe\nobjectClass: posixAccount\n")
-        counts = import_ldif(mock_conn, ldif, dry_run=True)
+        counts = import_ldif(mock_backend, ldif, dry_run=True)
         assert counts["added"] == 1
-        mock_conn.add_s.assert_not_called()
+        mock_backend.add.assert_not_called()
 
-    def test_import_real(self, mock_conn: MagicMock, tmp_path: Path) -> None:
+    def test_import_real(self, mock_backend: MagicMock, tmp_path: Path) -> None:
         ldif = tmp_path / "import.ldif"
         ldif.write_text("dn: uid=jdoe,ou=People,dc=example,dc=com\nuid: jdoe\n")
-        counts = import_ldif(mock_conn, ldif)
+        counts = import_ldif(mock_backend, ldif)
         assert counts["added"] == 1
-        mock_conn.add_s.assert_called_once()
+        mock_backend.add.assert_called_once()
 
-    def test_import_already_exists(self, mock_conn: MagicMock, tmp_path: Path) -> None:
+    def test_import_already_exists(self, mock_backend: MagicMock, tmp_path: Path) -> None:
         ldif = tmp_path / "import.ldif"
         ldif.write_text("dn: uid=jdoe,ou=People,dc=example,dc=com\nuid: jdoe\n")
-        mock_conn.add_s.side_effect = ldap.ALREADY_EXISTS
-        counts = import_ldif(mock_conn, ldif)
+        mock_backend.add.side_effect = ldap.ALREADY_EXISTS
+        counts = import_ldif(mock_backend, ldif)
         assert counts["skipped"] == 1
 
-    def test_import_file_not_found(self, mock_conn: MagicMock, tmp_path: Path) -> None:
+    def test_import_file_not_found(self, mock_backend: MagicMock, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
-            import_ldif(mock_conn, tmp_path / "nonexistent.ldif")
+            import_ldif(mock_backend, tmp_path / "nonexistent.ldif")
