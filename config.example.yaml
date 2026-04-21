@@ -65,3 +65,32 @@ password:
   generated_length: 20
   # Output file for bulk password changes (CSV: uid,password)
   bulk_output_file: "/tmp/ldap_passwords.csv"
+
+# ── Audit log ─────────────────────────────────────────────────────
+# Every modification goes through pluggable sinks. If you omit this
+# section entirely (or leave `sinks` empty), you get the historical
+# behaviour: one FileSink at /var/log/ldap-manager/audit.jsonl.
+#
+# To fan out, list one or more sinks below. A failure in any one sink
+# (e.g. HTTP endpoint down) does NOT block writes to the others.
+audit:
+  sinks:
+    # File sink — append one JSON object per line.
+    # - type: file
+    #   path: /var/log/ldap-manager/audit.jsonl
+
+    # Syslog sink — send each event as one syslog message.
+    # `address` can be "/dev/log" (default on Unix) or [host, port].
+    # - type: syslog
+    #   facility: local3
+    #   # address: ["127.0.0.1", 514]
+
+    # Stdout sink — JSON line per event to stdout. Useful in containers.
+    # - type: stdout
+
+    # HTTP sink — POST JSON to an endpoint (no extra dependency; uses urllib).
+    # - type: http
+    #   url: https://audit.example.com/ingest
+    #   timeout_seconds: 5
+    #   headers:
+    #     Authorization: "Bearer YOUR_TOKEN"

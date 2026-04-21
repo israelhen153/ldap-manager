@@ -245,3 +245,160 @@ class TestAuditLoggerFanout:
         lgr.close()
         assert a.closed
         assert b.closed
+
+
+# ── build_sinks factory ───────────────────────────────────────────
+class TestBuildSinks:
+    def test_empty_config_yields_default_file_sink(self) -> None:
+        from ldap_manager.audit import DEFAULT_AUDIT_LOG, build_sinks
+
+        sinks = build_sinks(None)
+        assert len(sinks) == 1
+        assert isinstance(sinks[0], FileSink)
+        assert str(sinks[0].path) == DEFAULT_AUDIT_LOG
+
+    def test_empty_list_yields_default_file_sink(self) -> None:
+        from ldap_manager.audit import DEFAULT_AUDIT_LOG, build_sinks
+
+        sinks = build_sinks([])
+        assert len(sinks) == 1
+        assert isinstance(sinks[0], FileSink)
+        assert str(sinks[0].path) == DEFAULT_AUDIT_LOG
+
+    def test_env_override_for_default_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        from ldap_manager.audit import build_sinks
+
+        override = tmp_path / "custom.jsonl"
+        monkeypatch.setenv("LDAP_MANAGER_AUDIT_LOG", str(override))
+        sinks = build_sinks(None)
+        assert isinstance(sinks[0], FileSink)
+        assert sinks[0].path == override
+
+    def test_file_sink_from_config(self, tmp_path: Path) -> None:
+        from ldap_manager.audit import build_sinks
+
+        target = tmp_path / "a.jsonl"
+        sinks = build_sinks([{"type": "file", "path": str(target)}])
+        assert len(sinks) == 1
+        assert isinstance(sinks[0], FileSink)
+        assert sinks[0].path == target
+
+    def test_stdout_sink_from_config(self) -> None:
+        from ldap_manager.audit import build_sinks
+
+        sinks = build_sinks([{"type": "stdout"}])
+        assert len(sinks) == 1
+        assert isinstance(sinks[0], StdoutSink)
+
+    def test_syslog_sink_from_config(self) -> None:
+        from ldap_manager.audit import build_sinks
+
+        with patch("logging.handlers.SysLogHandler") as mock_handler_cls:
+            mock_handler = MagicMock(spec=logging.Handler)
+            mock_handler.level = logging.NOTSET
+            mock_handler_cls.return_value = mock_handler
+            sinks = build_sinks([{"type": "syslog", "facility": "local5"}])
+        assert len(sinks) == 1
+        assert isinstance(sinks[0], SyslogSink)
+
+    def test_syslog_address_list_becomes_tuple(self) -> None:
+        from ldap_manager.audit import build_sinks
+
+        with patch("logging.handlers.SysLogHandler") as mock_handler_cls:
+            mock_handler = MagicMock(spec=logging.Handler)
+            mock_handler.level = logging.NOTSET
+            mock_handler_cls.return_value = mock_handler
+            build_sinks([{"type": "syslog", "facility": "local3", "address": ["127.0.0.1", 514]}])
+            kwargs = mock_handler_cls.call_args.kwargs
+            assert kwargs["address"] == ("127.0.0.1", 514)
+
+    def test_http_sink_from_config(self) -> None:
+        from ldap_manager.audit import build_sinks
+
+        sinks = build_sinks(
+            [
+                {
+                    "type": "http",
+                    "url": "https://example.com/audit",
+                    "timeout_seconds": 3,
+                    "headers": {"Authorization": "Bearer x"},
+                }
+            ]
+        )
+        assert len(sinks) == 1
+        assert isinstance(sinks[0], HTTPSink)
+
+    def test_http_sink_requires_url(self) -> None:
+        from ldap_manager.audit import build_sinks
+
+        with pytest.raises(ValueError, match="missing required 'url'"):
+            build_sinks([{"type": "http"}])
+
+    def test_multiple_sinks(self, tmp_path: Path) -> None:
+        from ldap_manager.audit import build_sinks
+
+        sinks = build_sinks(
+            [
+                {"type": "file", "path": str(tmp_path / "a.jsonl")},
+                {"type": "stdout"},
+            ]
+        )
+        assert len(sinks) == 2
+        assert isinstance(sinks[0], FileSink)
+        assert isinstance(sinks[1], StdoutSink)
+
+    def test_unknown_type_raises(self) -> None:
+        from ldap_manager.audit import build_sinks
+
+        with pytest.raises(ValueError, match="unknown sink type"):
+            build_sinks([{"type": "pigeon"}])
+
+    def test_missing_type_raises(self) -> None:
+        from ldap_manager.audit import build_sinks
+
+        with pytest.raises(ValueError, match="missing required 'type'"):
+            build_sinks([{"path": "/tmp/x.jsonl"}])
+
+    def test_non_mapping_raises(self) -> None:
+        from ldap_manager.audit import build_sinks
+
+        with pytest.raises(ValueError, match="must be a mapping"):
+            build_sinks(["not-a-dict"])  # type: ignore[list-item]
+
+    def test_unknown_keys_raise(self) -> None:
+        from ldap_manager.audit import build_sinks
+
+        with pytest.raises(ValueError, match="unknown keys"):
+            build_sinks([{"type": "stdout", "path": "/tmp/x.jsonl"}])
+
+
+# ── Config round-trip ─────────────────────────────────────────────
+class TestAuditConfigIntegration:
+    def test_yaml_round_trip_multiple_sinks(self, tmp_path: Path) -> None:
+        """YAML → AuditConfig → build_sinks produces the expected mix."""
+        from ldap_manager.audit import build_sinks
+        from ldap_manager.config import load_config
+
+        yaml = tmp_path / "audit.yaml"
+        yaml.write_text(f"audit:\n  sinks:\n    - type: file\n      path: {tmp_path / 'a.jsonl'}\n    - type: stdout\n")
+        cfg = load_config(yaml)
+        assert len(cfg.audit.sinks) == 2
+
+        sinks = build_sinks(cfg.audit.sinks)
+        assert isinstance(sinks[0], FileSink)
+        assert isinstance(sinks[1], StdoutSink)
+
+    def test_no_audit_section_gives_empty_list(self, tmp_path: Path) -> None:
+        """A config file without audit: still produces a working default."""
+        from ldap_manager.audit import DEFAULT_AUDIT_LOG, build_sinks
+        from ldap_manager.config import load_config
+
+        yaml = tmp_path / "no-audit.yaml"
+        yaml.write_text("ldap:\n  uri: ldap://localhost\n")
+        cfg = load_config(yaml)
+        assert cfg.audit.sinks == []
+
+        sinks = build_sinks(cfg.audit.sinks)
+        assert len(sinks) == 1
+        assert isinstance(sinks[0], FileSink)
+        assert str(sinks[0].path) == DEFAULT_AUDIT_LOG

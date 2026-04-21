@@ -349,3 +349,64 @@ class AuditLogger:
         # Newest first, limited
         entries.reverse()
         return entries[:limit]
+
+
+# ── Config-driven sink factory ────────────────────────────────────
+def build_sinks(specs: list[dict[str, Any]] | None) -> list[Sink]:
+    """Build Sink instances from a config list.
+
+    Each ``spec`` is a dict with a ``type`` key. Unknown types raise
+    :class:`ValueError` so a typo in YAML fails loud rather than
+    silently dropping audit events.
+
+    Backward-compat: if ``specs`` is falsy (None or empty list), the
+    factory returns a single :class:`FileSink` at the historical
+    default path. Users who never edit ``audit.sinks`` see no change.
+    """
+    if not specs:
+        default_path = os.environ.get("LDAP_MANAGER_AUDIT_LOG", DEFAULT_AUDIT_LOG)
+        return [FileSink(default_path)]
+
+    sinks: list[Sink] = []
+    for idx, spec in enumerate(specs):
+        if not isinstance(spec, dict):
+            raise ValueError(f"audit.sinks[{idx}] must be a mapping, got {type(spec).__name__}")
+        spec = dict(spec)  # don't mutate caller's config
+        sink_type = spec.pop("type", None)
+        if not sink_type:
+            raise ValueError(f"audit.sinks[{idx}] is missing required 'type' key")
+        sinks.append(_build_one_sink(sink_type, spec, idx))
+    return sinks
+
+
+def _build_one_sink(sink_type: str, opts: dict[str, Any], idx: int) -> Sink:
+    """Dispatch a single sink spec to its constructor."""
+    sink_type = sink_type.lower()
+    if sink_type == "file":
+        path = opts.pop("path", None) or os.environ.get("LDAP_MANAGER_AUDIT_LOG", DEFAULT_AUDIT_LOG)
+        if opts:
+            raise ValueError(f"audit.sinks[{idx}] (file) has unknown keys: {sorted(opts)}")
+        return FileSink(path)
+    if sink_type == "stdout":
+        if opts:
+            raise ValueError(f"audit.sinks[{idx}] (stdout) has unknown keys: {sorted(opts)}")
+        return StdoutSink()
+    if sink_type == "syslog":
+        facility = opts.pop("facility", "local3")
+        address = opts.pop("address", None)
+        # YAML lists come through as list; SysLogHandler wants a tuple.
+        if isinstance(address, list) and len(address) == 2:
+            address = (str(address[0]), int(address[1]))
+        if opts:
+            raise ValueError(f"audit.sinks[{idx}] (syslog) has unknown keys: {sorted(opts)}")
+        return SyslogSink(facility=facility, address=address)
+    if sink_type == "http":
+        url = opts.pop("url", None)
+        if not url:
+            raise ValueError(f"audit.sinks[{idx}] (http) is missing required 'url'")
+        timeout = float(opts.pop("timeout_seconds", 5.0))
+        headers = opts.pop("headers", None)
+        if opts:
+            raise ValueError(f"audit.sinks[{idx}] (http) has unknown keys: {sorted(opts)}")
+        return HTTPSink(url=url, timeout_seconds=timeout, headers=headers)
+    raise ValueError(f"audit.sinks[{idx}]: unknown sink type {sink_type!r}")

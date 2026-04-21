@@ -86,3 +86,37 @@ class TestAuditQuery:
     def test_query_empty_log(self, tmp_path: Path) -> None:
         lgr = AuditLogger(tmp_path / "empty.jsonl")
         assert lgr.query() == []
+
+
+class TestAuditBackwardCompat:
+    """The no-config path must behave exactly like the old logger."""
+
+    def test_no_sinks_config_uses_single_file_sink_at_default(self) -> None:
+        """With no audit.sinks in config, fall back to the historic file path.
+
+        Ensures existing deployments that never touched `audit:` in
+        their YAML keep working unchanged.
+        """
+        from ldap_manager.audit import (
+            DEFAULT_AUDIT_LOG,
+            FileSink,
+            build_sinks,
+        )
+        from ldap_manager.config import AuditConfig
+
+        # Default AuditConfig has empty sinks list — the "no opt-in" case.
+        audit_cfg = AuditConfig()
+        sinks = build_sinks(audit_cfg.sinks)
+
+        assert len(sinks) == 1
+        assert isinstance(sinks[0], FileSink)
+        assert str(sinks[0].path) == DEFAULT_AUDIT_LOG
+
+    def test_constructor_without_sinks_still_uses_file(self, tmp_path: Path) -> None:
+        """AuditLogger(log_path) — the legacy signature — still builds a FileSink."""
+        path = tmp_path / "legacy.jsonl"
+        lgr = AuditLogger(path)
+        assert lgr.path == path
+        assert lgr.enabled is True
+        lgr.log("user.create", "uid=jdoe")
+        assert path.read_text().count("uid=jdoe") == 1
