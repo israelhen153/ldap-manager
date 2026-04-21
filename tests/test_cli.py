@@ -249,3 +249,39 @@ class TestPasswdAllCLI:
         assert result.exit_code != 0
         assert "--confirm-plaintext requires --output" in result.output
         conn.modify_s.assert_not_called()
+
+    @patch("ldap_manager.cli.LDAPConnection")
+    @patch("ldap_manager.cli.load_config")
+    def test_world_readable_parent_dir_exits_nonzero(
+        self, mock_cfg: MagicMock, mock_ldap: MagicMock, runner: CliRunner, tmp_path
+    ) -> None:
+        """A world-readable parent dir must be refused before any LDAP write."""
+        conn = MagicMock()
+        conn.search_s.return_value = [make_ldap_entry("alice", "Alice", "A", 10001)]
+        mock_ldap.return_value.__enter__ = MagicMock(return_value=conn)
+        mock_ldap.return_value.__exit__ = MagicMock(return_value=False)
+
+        from ldap_manager.config import Config
+
+        mock_cfg.return_value = Config()
+
+        wide = tmp_path / "wide"
+        wide.mkdir()
+        wide.chmod(0o755)
+        out = wide / "pw.csv"
+
+        result = runner.invoke(
+            main,
+            [
+                "passwd-all",
+                "--yes",
+                "--output",
+                str(out),
+                "--confirm-plaintext",
+            ],
+        )
+        assert result.exit_code != 0
+        assert "world-readable" in result.output
+        assert str(wide) in result.output
+        assert not out.exists()
+        conn.modify_s.assert_not_called()

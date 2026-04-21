@@ -33,7 +33,7 @@ from .batch import run_batch
 from .config import load_config
 from .connection import LDAPConnection
 from .groups import GroupManager
-from .passwords import bulk_password_reset
+from .passwords import InsecureOutputDirError, bulk_password_reset
 from .users import UserManager
 
 
@@ -1030,14 +1030,18 @@ def passwd_all(
 
     cfg = ctx.obj["config"]
 
-    with LDAPConnection(cfg.ldap) as conn:
-        result = bulk_password_reset(
-            conn,
-            cfg,
-            enabled_only=not include_disabled,
-            output_file=output,
-            dry_run=dry_run,
-        )
+    try:
+        with LDAPConnection(cfg.ldap) as conn:
+            result = bulk_password_reset(
+                conn,
+                cfg,
+                enabled_only=not include_disabled,
+                output_file=output,
+                dry_run=dry_run,
+            )
+    except InsecureOutputDirError as exc:
+        click.echo(f"error: {exc}", err=True)
+        ctx.exit(2)
 
     prefix = "[DRY RUN] " if dry_run else ""
     if result.output_path is None:

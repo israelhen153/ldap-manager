@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import csv
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from ldap_manager.config import Config
-from ldap_manager.passwords import BulkResetResult, bulk_password_reset
+from ldap_manager.passwords import BulkResetResult, InsecureOutputDirError, bulk_password_reset
 
 from .conftest import make_ldap_entry
 
@@ -104,3 +105,34 @@ class TestBulkReset:
             rows = list(csv.reader(f))[1:]  # skip header
         passwords = [row[2] for row in rows]
         assert len(set(passwords)) == len(passwords), "passwords collided"
+
+    def test_output_file_mode_is_0o600(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
+        """Permission must be exactly 0600 even under a permissive umask."""
+        mock_conn.search_s.return_value = [
+            make_ldap_entry("alice", "Alice", "A", 10001),
+        ]
+        output = tmp_path / "pw.csv"
+        # Force a wide umask — the implementation must chmod regardless.
+        old_umask = os.umask(0)
+        try:
+            bulk_password_reset(mock_conn, cfg, output_file=output, dry_run=True)
+        finally:
+            os.umask(old_umask)
+
+        assert output.stat().st_mode & 0o777 == 0o600
+
+    def test_world_readable_parent_is_refused(self, cfg: Config, mock_conn: MagicMock, tmp_path: Path) -> None:
+        """If the parent dir has o+r, refuse before writing anything."""
+        mock_conn.search_s.return_value = [
+            make_ldap_entry("alice", "Alice", "A", 10001),
+        ]
+        parent = tmp_path / "wide"
+        parent.mkdir()
+        parent.chmod(0o755)  # world-readable
+        output = parent / "pw.csv"
+
+        with pytest.raises(InsecureOutputDirError, match="world-readable"):
+            bulk_password_reset(mock_conn, cfg, output_file=output, dry_run=False)
+
+        assert not output.exists(), "file must not be created"
+        mock_conn.modify_s.assert_not_called()

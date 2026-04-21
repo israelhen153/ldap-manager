@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 import secrets
+import stat
 import string
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +33,15 @@ log = logging.getLogger(__name__)
 # excludes punctuation: those bytes survive CSV/shell round-trips better and
 # the entropy from length is cheaper than the compatibility cost of symbols.
 _PASSWORD_ALPHABET = string.ascii_letters + string.digits
+
+
+class InsecureOutputDirError(Exception):
+    """Raised when the CSV output's parent directory is world-readable.
+
+    Plaintext passwords landing inside a directory with ``o+r`` means any
+    local account can read them the instant they exist, regardless of the
+    file's own 0600. Refuse upfront rather than silently create the file.
+    """
 
 
 @dataclass
@@ -87,6 +98,21 @@ def bulk_password_reset(
     user_mgr = UserManager(cfg)
     pw_length = length if length is not None else cfg.password.generated_length
 
+    # If a file destination is requested, validate the parent directory
+    # BEFORE touching LDAP — we don't want to rotate every user's password
+    # just to then refuse to write the manifest to a world-readable dir.
+    out_path: Path | None = None
+    if output_file is not None:
+        out_path = Path(output_file)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        parent_mode = out_path.parent.stat().st_mode
+        if parent_mode & stat.S_IROTH:
+            raise InsecureOutputDirError(
+                f"Refusing to write plaintext passwords into {out_path.parent}: "
+                f"directory is world-readable (mode {oct(parent_mode & 0o777)}). "
+                "Tighten permissions (e.g. chmod o-r) and retry."
+            )
+
     users = user_mgr.list_users(conn, enabled_only=enabled_only)
     if not users:
         log.warning("No users found matching criteria")
@@ -114,16 +140,19 @@ def bulk_password_reset(
             log.error("Failed to reset password for %s: %s", user.uid, exc)
             errors.append((user.uid, str(exc)))
 
-    out_path: Path | None = None
-    if output_file is not None:
-        out_path = Path(output_file)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(out_path, "w", newline="") as f:
+    if out_path is not None:
+        # Create the file with 0600 BEFORE any password bytes land in it.
+        # os.open with explicit mode avoids a window where the file exists
+        # with the umask-derived mode while we're writing rows.
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+        fd = os.open(out_path, flags, 0o600)
+        # chmod explicitly too — umask masks the O_CREAT mode, and if the
+        # file already existed O_CREAT is a no-op for mode.
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["uid", "cn", "new_password"])
             writer.writerows(results)
-        # Restrictive permissions on the password file.
-        out_path.chmod(0o600)
 
     log.info(
         "Bulk reset complete: %d succeeded, %d failed. Output: %s",
