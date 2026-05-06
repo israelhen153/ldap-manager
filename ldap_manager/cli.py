@@ -107,11 +107,11 @@ class _ErrorHandlingGroup(click.Group):
 
     def invoke(self, ctx: click.Context) -> None:
         try:
-            return super().invoke(ctx)
-        except (click.ClickException, click.Abort, SystemExit):
+            super().invoke(ctx)
+        except (click.ClickException, click.Abort, click.exceptions.Exit, SystemExit):
             raise
         except KeyboardInterrupt:
-            raise SystemExit(130)
+            raise SystemExit(130) from None
         except Exception as e:
             # --debug shows full traceback for development
             if ctx.params.get("debug") or os.environ.get("LDAP_MANAGER_DEBUG"):
@@ -176,10 +176,14 @@ def main(
     ctx.obj["config"] = cfg
 
     # Audit logger — available to every subcommand via ctx.obj["audit"].
-    from .audit import AuditLogger, build_sinks
+    # Non-fatal: audit setup failure must never prevent real work.
+    try:
+        from .audit import AuditLogger, build_sinks
 
-    sinks_spec = cfg.audit.sinks if hasattr(cfg.audit, "sinks") else None
-    ctx.obj["audit"] = AuditLogger(sinks=build_sinks(sinks_spec))
+        sinks_spec = cfg.audit.sinks if hasattr(cfg.audit, "sinks") else None
+        ctx.obj["audit"] = AuditLogger(sinks=build_sinks(sinks_spec) if sinks_spec else [])
+    except Exception:
+        ctx.obj["audit"] = None
 
 
 def _audit(ctx: click.Context, action: str, target: str, **kwargs: Any) -> None:
@@ -189,9 +193,6 @@ def _audit(ctx: click.Context, action: str, target: str, **kwargs: Any) -> None:
         operator = ctx.obj.get("config", None)
         bind_dn = operator.ldap.bind_dn if operator else ""
         logger.log(action, target, operator=bind_dn, **kwargs)
-
-    if os.environ.get("LDAP_MANAGER_DEBUG"):
-        ctx.obj["debug"] = True
 
 
 # ── User commands ──────────────────────────────────────────────────
@@ -765,6 +766,7 @@ def user_passwd(ctx: click.Context, uid: str, use_random: bool, use_stdin: bool)
 
     if use_random:
         import secrets
+
         pw = secrets.token_urlsafe(16)
     elif use_stdin:
         pw = sys.stdin.readline().rstrip("\n")
@@ -865,9 +867,12 @@ def batch_cmd(
         )
 
     click.echo(result.summary())
-    _audit(ctx, f"batch.{action}", str(file_path),
-           details={"succeeded": result.succeeded, "failed": result.failed,
-                    "skipped": result.skipped, "dry_run": dry_run})
+    _audit(
+        ctx,
+        f"batch.{action}",
+        str(file_path),
+        details={"succeeded": result.succeeded, "failed": result.failed, "skipped": result.skipped, "dry_run": dry_run},
+    )
 
     if report:
         report_path = Path(report)
@@ -1323,7 +1328,7 @@ def group_create(ctx: click.Context, cn: str, gid_number: int, description: str,
         _json_out({"action": "created", "dn": dn, "cn": cn, "gid_number": gid_number})
     else:
         click.echo(f"Created group: {dn}")
-    _audit(ctx, "group.create", dn, details={"cn": cn, "gid": gid_number})
+    _audit(ctx, "group.create", dn or cn, details={"cn": cn, "gid": gid_number})
 
 
 @group.command("delete")
@@ -1808,9 +1813,12 @@ def ldif_import(ctx: click.Context, ldif_file: str, dry_run: bool, stop_on_error
 
     prefix = "[DRY RUN] " if dry_run else ""
     click.echo(f"{prefix}Added: {counts['added']}, Skipped: {counts['skipped']}, Errors: {counts['errors']}")
-    _audit(ctx, "import.ldif", ldif_file,
-           details={"added": counts["added"], "skipped": counts["skipped"],
-                    "errors": counts["errors"], "dry_run": dry_run})
+    _audit(
+        ctx,
+        "import.ldif",
+        ldif_file,
+        details={"added": counts["added"], "skipped": counts["skipped"], "errors": counts["errors"], "dry_run": dry_run},
+    )
 
 
 # ── Tree / OU commands ─────────────────────────────────────────────

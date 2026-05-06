@@ -31,12 +31,14 @@ import click
 
 try:
     import ldap
+
     _LDAP_AVAILABLE = True
 except ImportError:
     _LDAP_AVAILABLE = False
 
 try:
     import yaml
+
     _YAML_AVAILABLE = True
 except ImportError:
     _YAML_AVAILABLE = False
@@ -118,7 +120,7 @@ def format_error(exc: Exception) -> str:
 # ── Structured exit codes ────────────────────────────────────────────
 
 EXIT_GENERAL = 1
-EXIT_USAGE = 2        # Click default for bad arguments
+EXIT_USAGE = 2  # Click default for bad arguments
 EXIT_CONNECTION = 3
 EXIT_AUTH = 4
 EXIT_NOT_FOUND = 5

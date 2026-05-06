@@ -107,6 +107,7 @@ ignore = [
     "B008",   # function calls in argument defaults (Click does this)
     "RET505", # unnecessary else after return — readability preference
     "UP007",  # X | Y union syntax — keep Optional for 3.10 compat
+    "N806",   # Variable `SECTIONS` in function should be lowercase
 ]
 
 [tool.ruff.lint.per-file-ignores]

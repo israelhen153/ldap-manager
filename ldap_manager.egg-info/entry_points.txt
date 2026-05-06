@@ -1,3 +1,0 @@
-[console_scripts]
-ldap-manager = ldap_manager.cli:main
-lmgr = ldap_manager.cli:main

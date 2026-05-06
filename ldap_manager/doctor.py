@@ -20,12 +20,14 @@ import logging
 import os
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import click
 
 try:
     import ldap
+
     _LDAP = True
 except ImportError:
     _LDAP = False
@@ -36,11 +38,12 @@ log = logging.getLogger(__name__)
 @dataclass
 class Check:
     """Result of a single diagnostic check."""
+
     name: str
     passed: bool
     detail: str = ""
     fixable: bool = False
-    fix_fn: Any = None        # callable or None
+    fix_fn: Any = None  # callable or None
     fix_hint: str = ""
 
 
@@ -56,13 +59,9 @@ def _check_connection(cfg: Any) -> Check:
         conn.unbind_s()
         return Check(f"Connection to {uri}", True)
     except ldap.INVALID_CREDENTIALS:
-        return Check(f"Bind to {uri}", False,
-                     detail="Invalid credentials",
-                     fix_hint="Check bind_dn / bind_password in config.")
+        return Check(f"Bind to {uri}", False, detail="Invalid credentials", fix_hint="Check bind_dn / bind_password in config.")
     except ldap.SERVER_DOWN:
-        return Check(f"Connection to {uri}", False,
-                     detail="Server unreachable",
-                     fix_hint="Is slapd running? Check LDAP_URI.")
+        return Check(f"Connection to {uri}", False, detail="Server unreachable", fix_hint="Is slapd running? Check LDAP_URI.")
     except Exception as e:
         return Check(f"Connection to {uri}", False, detail=str(e))
 
@@ -72,9 +71,12 @@ def _check_base_dn(conn: Any, base_dn: str) -> Check:
         conn.search_s(base_dn, ldap.SCOPE_BASE, "(objectClass=*)")
         return Check(f"Base DN {base_dn}", True)
     except ldap.NO_SUCH_OBJECT:
-        return Check(f"Base DN {base_dn}", False,
-                     detail="Not found in directory",
-                     fix_hint="Verify base_dn in config matches your DIT root.")
+        return Check(
+            f"Base DN {base_dn}",
+            False,
+            detail="Not found in directory",
+            fix_hint="Verify base_dn in config matches your DIT root.",
+        )
 
 
 def _check_ou(conn: Any, ou_name: str, base_dn: str) -> Check:
@@ -83,102 +85,99 @@ def _check_ou(conn: Any, ou_name: str, base_dn: str) -> Check:
         conn.search_s(ou_dn, ldap.SCOPE_BASE, "(objectClass=*)")
         return Check(f"ou={ou_name}", True)
     except ldap.NO_SUCH_OBJECT:
+
         def _fix(c: Any = conn, d: str = ou_dn, n: str = ou_name) -> None:
             attrs = [
                 ("objectClass", [b"organizationalUnit", b"top"]),
                 ("ou", [n.encode()]),
             ]
             c.add_s(d, attrs)
-        return Check(f"ou={ou_name}", False,
-                     fixable=True, fix_fn=_fix,
-                     fix_hint=f"Create: ldap-manager tree create-ou {ou_name}")
+
+        return Check(f"ou={ou_name}", False, fixable=True, fix_fn=_fix, fix_hint=f"Create: ldap-manager tree create-ou {ou_name}")
 
 
 def _check_schema_attr(conn: Any, attr_name: str, label: str) -> Check:
     try:
-        res = conn.search_s("cn=subschema", ldap.SCOPE_BASE,
-                            "(objectClass=*)", ["attributeTypes"])
+        res = conn.search_s("cn=subschema", ldap.SCOPE_BASE, "(objectClass=*)", ["attributeTypes"])
         blob = str(res).lower()
         if attr_name.lower() in blob:
             return Check(f"{label} schema loaded", True)
-        return Check(f"{label} schema loaded", False,
-                     fix_hint=f"Load the {label} LDIF into cn=config.")
+        return Check(f"{label} schema loaded", False, fix_hint=f"Load the {label} LDIF into cn=config.")
     except Exception:
-        return Check(f"{label} schema", False,
-                     detail="Could not query schema",
-                     fix_hint=f"Load the {label} LDIF into cn=config.")
+        return Check(f"{label} schema", False, detail="Could not query schema", fix_hint=f"Load the {label} LDIF into cn=config.")
 
 
 def _check_overlay(conn: Any, name: str) -> Check:
     try:
-        res = conn.search_s("cn=config", ldap.SCOPE_SUBTREE,
-                            f"(olcOverlay={name})")
+        res = conn.search_s("cn=config", ldap.SCOPE_SUBTREE, f"(olcOverlay={name})")
         if res:
             return Check(f"{name} overlay", True)
-        return Check(f"{name} overlay", False,
-                     fix_hint=f"Load {name} overlay in cn=config.")
+        return Check(f"{name} overlay", False, fix_hint=f"Load {name} overlay in cn=config.")
     except ldap.INSUFFICIENT_ACCESS:
-        return Check(f"{name} overlay", False,
-                     detail="Cannot read cn=config (need root DN)")
+        return Check(f"{name} overlay", False, detail="Cannot read cn=config (need root DN)")
     except Exception as e:
         return Check(f"{name} overlay", False, detail=str(e))
 
 
 def _check_directory(path: str, label: str) -> Check:
-    if os.path.isdir(path):
+    target = Path(path)
+    if target.is_dir():
         if os.access(path, os.W_OK):
             return Check(f"{label} ({path})", True)
-        def _fix(p: str = path) -> None:
-            os.chmod(p, 0o700)
-        return Check(f"{label} ({path})", False,
-                     detail="Not writable",
-                     fixable=True, fix_fn=_fix,
-                     fix_hint=f"chmod 700 {path}")
-    def _fix(p: str = path) -> None:
-        os.makedirs(p, mode=0o700, exist_ok=True)
-    return Check(f"{label} ({path})", False,
-                 detail="Does not exist",
-                 fixable=True, fix_fn=_fix,
-                 fix_hint=f"mkdir -p {path}")
+
+        def _fix_perms(_t: Path = target) -> None:
+            _t.chmod(0o700)
+
+        return Check(
+            f"{label} ({path})", False, detail="Not writable", fixable=True, fix_fn=_fix_perms, fix_hint=f"chmod 700 {path}"
+        )
+
+    def _fix_mkdir(_t: Path = target) -> None:
+        _t.mkdir(parents=True, mode=0o700, exist_ok=True)
+
+    return Check(
+        f"{label} ({path})", False, detail="Does not exist", fixable=True, fix_fn=_fix_mkdir, fix_hint=f"mkdir -p {path}"
+    )
 
 
 def _check_config_perms(path: str) -> Check:
-    if not os.path.exists(path):
+    target = Path(path)
+    if not target.exists():
         return Check("Config file", False, detail=f"{path} not found")
-    mode = oct(os.stat(path).st_mode)[-3:]
+    mode = oct(target.stat().st_mode)[-3:]
     if mode in ("600", "400"):
         return Check(f"Config permissions ({path})", True)
-    def _fix(p: str = path) -> None:
-        os.chmod(p, 0o600)
-    return Check(f"Config permissions ({path})", False,
-                 detail=f"mode {mode}, should be 600",
-                 fixable=True, fix_fn=_fix,
-                 fix_hint=f"chmod 600 {path}")
+
+    def _fix(_t: Path = target) -> None:
+        _t.chmod(0o600)
+
+    return Check(
+        f"Config permissions ({path})",
+        False,
+        detail=f"mode {mode}, should be 600",
+        fixable=True,
+        fix_fn=_fix,
+        fix_hint=f"chmod 600 {path}",
+    )
 
 
 def _check_slapd() -> Check:
     try:
-        r = subprocess.run(["systemctl", "is-active", "slapd"],
-                           capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["systemctl", "is-active", "slapd"], capture_output=True, text=True, timeout=5)
         if r.stdout.strip() == "active":
-            pr = subprocess.run(["pgrep", "-x", "slapd"],
-                                capture_output=True, text=True, timeout=5)
+            pr = subprocess.run(["pgrep", "-x", "slapd"], capture_output=True, text=True, timeout=5)
             pid = pr.stdout.strip().split("\n")[0] if pr.stdout.strip() else "?"
             return Check(f"slapd running (pid {pid})", True)
-        return Check("slapd running", False,
-                     detail=f"status: {r.stdout.strip()}",
-                     fix_hint="systemctl start slapd")
+        return Check("slapd running", False, detail=f"status: {r.stdout.strip()}", fix_hint="systemctl start slapd")
     except FileNotFoundError:
-        return Check("slapd running", False,
-                     detail="systemctl not found (not on LDAP host?)")
+        return Check("slapd running", False, detail="systemctl not found (not on LDAP host?)")
     except Exception as e:
         return Check("slapd running", False, detail=str(e))
 
 
 def _check_locked(conn: Any, base_dn: str) -> Check:
     try:
-        res = conn.search_s(f"ou=People,{base_dn}", ldap.SCOPE_ONELEVEL,
-                            "(pwdAccountLockedTime=*)", ["uid"])
+        res = conn.search_s(f"ou=People,{base_dn}", ldap.SCOPE_ONELEVEL, "(pwdAccountLockedTime=*)", ["uid"])
         if not res:
             return Check("No locked accounts", True)
         uids = []
@@ -188,9 +187,9 @@ def _check_locked(conn: Any, base_dn: str) -> Check:
         n = len(uids)
         sample = ", ".join(uids[:5])
         extra = f" (+{n - 5} more)" if n > 5 else ""
-        return Check(f"{n} locked account(s)", False,
-                     detail=f"{sample}{extra}",
-                     fix_hint="Review: ldap-manager ppolicy check-all")
+        return Check(
+            f"{n} locked account(s)", False, detail=f"{sample}{extra}", fix_hint="Review: ldap-manager ppolicy check-all"
+        )
     except ldap.NO_SUCH_OBJECT:
         return Check("Locked accounts", True, detail="ou=People not found, skipped")
     except ldap.UNDEFINED_TYPE:
@@ -243,15 +242,20 @@ def run_doctor(cfg: Any, config_path: str | None = None, *, do_fix: bool = False
     checks.append(_check_directory(cfg.backup.backup_dir, "Backup directory"))
 
     # ── Config ──
-    if config_path and os.path.exists(config_path):
+    if config_path and Path(config_path).exists():
         checks.append(_check_config_perms(config_path))
 
     if cfg.users.generate_password_on_create:
         checks.append(Check("Config: generate_password_on_create", True))
     else:
-        checks.append(Check("Config: generate_password_on_create", False,
-                            detail="Using default_password instead of random generation",
-                            fix_hint="Set generate_password_on_create: true in config"))
+        checks.append(
+            Check(
+                "Config: generate_password_on_create",
+                False,
+                detail="Using default_password instead of random generation",
+                fix_hint="Set generate_password_on_create: true in config",
+            )
+        )
 
     # ── Output ──
     fixed = 0

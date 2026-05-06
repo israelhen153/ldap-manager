@@ -213,7 +213,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
     _apply_env(raw)
 
     # Validate keys — catch typos that would silently use wrong defaults
-    _SECTIONS: dict[str, type] = {
+    SECTIONS: dict[str, type] = {
         "ldap": LDAPConfig,
         "users": UsersConfig,
         "backup": BackupConfig,
@@ -221,7 +221,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
         "audit": AuditConfig,
         "schema": SchemaConfig,
     }
-    for section_name, section_cls in _SECTIONS.items():
+    for section_name, section_cls in SECTIONS.items():
         section_data = raw.get(section_name, {})
         if not isinstance(section_data, dict):
             continue
@@ -229,8 +229,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
         unknown = set(section_data) - known
         if unknown:
             raise ValueError(
-                f"Unknown config key(s) in '{section_name}': {', '.join(sorted(unknown))}. "
-                f"Valid keys: {', '.join(sorted(known))}"
+                f"Unknown config key(s) in '{section_name}': {', '.join(sorted(unknown))}. Valid keys: {', '.join(sorted(known))}"
             )
 
     # Build typed config

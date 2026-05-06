@@ -388,6 +388,7 @@ class TestAuditConfigIntegration:
         assert isinstance(sinks[0], FileSink)
         assert isinstance(sinks[1], StdoutSink)
 
+    @patch("ldap_manager.config._SYSTEM_CONFIG", Path("/nonexistent"))
     def test_no_audit_section_gives_empty_list(self, tmp_path: Path) -> None:
         """A config file without audit: still produces a working default."""
         from ldap_manager.audit import DEFAULT_AUDIT_LOG, build_sinks

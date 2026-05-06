@@ -29,11 +29,8 @@ def validate_uid(uid: str) -> str:
     """
     if not uid or not _UID_RE.match(uid):
         raise click.ClickException(
-            f"Invalid UID: {uid!r}. "
-            "Must start with a letter, contain only a-z, 0-9, dot, dash, underscore."
+            f"Invalid UID: {uid!r}. Must start with a letter, contain only a-z, 0-9, dot, dash, underscore."
         )
     if len(uid) > _UID_MAX:
-        raise click.ClickException(
-            f"UID too long ({len(uid)} chars, max {_UID_MAX})."
-        )
+        raise click.ClickException(f"UID too long ({len(uid)} chars, max {_UID_MAX}).")
     return uid
