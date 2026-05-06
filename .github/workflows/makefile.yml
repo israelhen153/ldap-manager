@@ -76,6 +76,8 @@ jobs:
       LDAP_BIND_DN: "cn=admin,dc=test,dc=local"
       LDAP_BIND_PASSWORD: "admin"
       LDAP_BASE_DN: "dc=test,dc=local"
+      LDAP_USERS_OU: "ou=People,dc=test,dc=local"
+      LDAP_GROUPS_OU: "ou=Groups,dc=test,dc=local"
 
     steps:
       - uses: actions/checkout@v4
