@@ -27,6 +27,7 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "LDAP_BIND_PASSWORD": ("ldap", "bind_password"),
     "LDAP_BASE_DN": ("ldap", "base_dn"),
     "LDAP_USERS_OU": ("ldap", "users_ou"),
+    "LDAP_GROUPS_OU": ("ldap", "groups_ou"),
     "LDAP_START_TLS": ("ldap", "start_tls"),
     "LDAP_TLS_CACERT": ("ldap", "tls_cacert"),
 }
@@ -213,7 +214,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
     _apply_env(raw)
 
     # Validate keys — catch typos that would silently use wrong defaults
-    SECTIONS: dict[str, type] = {
+    sections: dict[str, type] = {
         "ldap": LDAPConfig,
         "users": UsersConfig,
         "backup": BackupConfig,
@@ -221,7 +222,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
         "audit": AuditConfig,
         "schema": SchemaConfig,
     }
-    for section_name, section_cls in SECTIONS.items():
+    for section_name, section_cls in sections.items():
         section_data = raw.get(section_name, {})
         if not isinstance(section_data, dict):
             continue
@@ -229,7 +230,8 @@ def load_config(config_path: str | Path | None = None) -> Config:
         unknown = set(section_data) - known
         if unknown:
             raise ValueError(
-                f"Unknown config key(s) in '{section_name}': {', '.join(sorted(unknown))}. Valid keys: {', '.join(sorted(known))}"
+                f"Unknown config key(s) in '{section_name}': {', '.join(sorted(unknown))}. "
+                f"Valid keys: {', '.join(sorted(known))}"
             )
 
     # Build typed config
