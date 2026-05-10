@@ -126,6 +126,7 @@ jobs:
 
       - name: Run integration tests
         run: |
+          set -o pipefail
           chmod +x test_integration.sh
           ./test_integration.sh 2>&1 | tee integration_output.log
 
