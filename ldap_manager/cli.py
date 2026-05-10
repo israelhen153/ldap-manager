@@ -44,9 +44,9 @@ def _setup_logging(verbose: bool, log_file: str | None = None) -> None:
 
     if log_file:
         try:
-            log_dir = os.path.dirname(log_file)
-            if log_dir:
-                os.makedirs(log_dir, mode=0o700, exist_ok=True)
+            log_path = Path(log_file)
+            if log_path.parent != log_path:
+                log_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
             logging.basicConfig(
                 filename=log_file,
                 level=level,

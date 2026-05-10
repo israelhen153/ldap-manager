@@ -232,8 +232,7 @@ def load_config(config_path: str | Path | None = None) -> Config:
         unknown = set(section_data) - known
         if unknown:
             raise ValueError(
-                f"Unknown config key(s) in '{section_name}': {', '.join(sorted(unknown))}. "
-                f"Valid keys: {', '.join(sorted(known))}"
+                f"Unknown config key(s) in '{section_name}': {', '.join(sorted(unknown))}. Valid keys: {', '.join(sorted(known))}"
             )
 
     # Build typed config
