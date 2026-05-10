@@ -30,6 +30,7 @@ _ENV_MAP: dict[str, tuple[str, ...]] = {
     "LDAP_GROUPS_OU": ("ldap", "groups_ou"),
     "LDAP_START_TLS": ("ldap", "start_tls"),
     "LDAP_TLS_CACERT": ("ldap", "tls_cacert"),
+    "LDAP_LOG_FILE": ("log_file",),
 }
 
 
@@ -188,6 +189,7 @@ class Config:
     # ``schema`` block target AD, 389ds, or custom directories.
     backend: str = "openldap"
     schema: SchemaConfig = field(default_factory=SchemaConfig)
+    log_file: str = "/var/log/ldap-manager/ldap.log"
 
 
 def load_config(config_path: str | Path | None = None) -> Config:
@@ -243,4 +245,5 @@ def load_config(config_path: str | Path | None = None) -> Config:
         audit=AuditConfig(**raw.get("audit", {})),
         backend=raw.get("backend", "openldap"),
         schema=SchemaConfig(**raw.get("schema", {})),
+        log_file=raw.get("log_file", "/var/log/ldap-manager/ldap.log"),
     )

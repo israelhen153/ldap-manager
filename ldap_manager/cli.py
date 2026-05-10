@@ -37,13 +37,30 @@ from .passwords import InsecureOutputDirError, bulk_password_reset
 from .users import UserManager
 
 
-def _setup_logging(verbose: bool) -> None:
+def _setup_logging(verbose: bool, log_file: str | None = None) -> None:
     level = logging.DEBUG if verbose else logging.INFO
+    fmt = "%(asctime)s [%(levelname)-7s] %(name)s: %(message)s"
+    datefmt = "%Y-%m-%d %H:%M:%S"
+
+    if log_file:
+        try:
+            log_dir = os.path.dirname(log_file)
+            if log_dir:
+                os.makedirs(log_dir, mode=0o700, exist_ok=True)
+            logging.basicConfig(
+                filename=log_file,
+                level=level,
+                format=fmt,
+                datefmt=datefmt,
+            )
+            return
+        except (PermissionError, OSError):
+            pass
+
     logging.basicConfig(
-        filename="/var/log/ldap.log",
         level=level,
-        format="%(asctime)s [%(levelname)-7s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+        format=fmt,
+        datefmt=datefmt,
     )
 
 
@@ -165,9 +182,10 @@ def main(
         LDAP_BIND_PASSWORD    Bind password (overrides config)
         LDAP_BASE_DN          Base DN (overrides config)
     """
-    _setup_logging(verbose or debug)
+    log_path = cfg.audit.sink
     ctx.ensure_object(dict)
     cfg = load_config(config_path)
+    _setup_logging(verbose or debug, cfg.log_file)
     # ``--backend`` is a per-invocation override — handy for testing AD
     # against a config.yaml that defaults to openldap, or vice versa,
     # without editing the file.

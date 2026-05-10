@@ -10,6 +10,12 @@
 #                        directories or running on hosts without libldap.
 # backend: openldap
 
+# ── Application log ──────────────────────────────────────────────
+# Where the tool writes its own operational log (not audit — see below).
+# Falls back to stderr if the path isn't writable.
+# Override with LDAP_LOG_FILE env var.
+# log_file: /var/log/ldap-manager/ldap.log
+
 # ── Schema profile ────────────────────────────────────────────────
 # Attribute and object-class names that differ between directory
 # flavours. Defaults below match OpenLDAP POSIX (the historical
@@ -108,8 +114,8 @@ password:
 audit:
   sinks:
     # File sink — append one JSON object per line.
-    # - type: file
-    #   path: /var/log/ldap-manager/audit.jsonl
+    #- type: file
+    #   path: /var/log/ldap.log
 
     # Syslog sink — send each event as one syslog message.
     # `address` can be "/dev/log" (default on Unix) or [host, port].
