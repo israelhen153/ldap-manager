@@ -124,6 +124,27 @@ jobs:
           ou: Groups
           EOF
 
+ 
+      - name: Verify LDAP connection
+        run: |
+          echo "=== Environment ==="
+          echo "LDAP_URI=$LDAP_URI"
+          echo "LDAP_BIND_DN=$LDAP_BIND_DN"
+          echo "LDAP_BASE_DN=$LDAP_BASE_DN"
+          echo "LDAP_USERS_OU=${LDAP_USERS_OU:-not set}"
+          echo "LDAP_GROUPS_OU=${LDAP_GROUPS_OU:-not set}"
+          echo ""
+          echo "=== ldapsearch test ==="
+          ldapsearch -x -H ldap://localhost:389 -b "dc=test,dc=local" \
+            -D "cn=admin,dc=test,dc=local" -w admin "(objectClass=*)" dn | head -20
+          echo ""
+          echo "=== ldap-manager test ==="
+          ldap-manager user list 2>&1 || true
+          echo ""
+          echo "=== ldap-manager doctor ==="
+          ldap-manager doctor 2>&1 || true
+ 
+
       - name: Run integration tests
         run: |
           set -o pipefail
