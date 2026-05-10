@@ -182,7 +182,6 @@ def main(
         LDAP_BIND_PASSWORD    Bind password (overrides config)
         LDAP_BASE_DN          Base DN (overrides config)
     """
-    log_path = cfg.audit.sink
     ctx.ensure_object(dict)
     cfg = load_config(config_path)
     _setup_logging(verbose or debug, cfg.log_file)
